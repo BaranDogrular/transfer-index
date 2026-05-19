@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+node_modules/
+frontend/node_modules/
+.venv/
+.venv-1/
+.venv-2/
+__pycache__/
+*.pyc
+.env

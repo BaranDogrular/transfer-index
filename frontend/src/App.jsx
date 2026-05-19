@@ -20,6 +20,7 @@ function App() {
   const [players, setPlayers] = useState([]);
   const [scores, setScores] = useState({});
   const [newPlayer, setNewPlayer] = useState(emptyPlayer);
+  const [selectedPlayer, setSelectedPlayer] = useState(null);
 
   const fetchPlayers = () => {
     fetch("http://127.0.0.1:8000/players")
@@ -64,9 +65,9 @@ function App() {
     fetchPlayers();
   };
 
-  const analyzeTransfer = async (playerId) => {
+  const analyzeTransfer = async (player) => {
     const response = await fetch(
-      `http://127.0.0.1:8000/players/${playerId}/transfer-score`,
+      `http://127.0.0.1:8000/players/${player.id}/transfer-score`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -82,7 +83,9 @@ function App() {
     );
 
     const data = await response.json();
-    setScores((prev) => ({ ...prev, [playerId]: data }));
+
+    setScores((prev) => ({ ...prev, [player.id]: data }));
+    setSelectedPlayer(player);
   };
 
   return (
@@ -157,7 +160,7 @@ function App() {
               </div>
 
               <button
-                onClick={() => analyzeTransfer(player.id)}
+                onClick={() => analyzeTransfer(player)}
                 className="w-full mt-6 bg-yellow-500 hover:bg-yellow-400 text-black font-bold py-3 rounded-2xl transition"
               >
                 Transfer Analizi
@@ -169,28 +172,55 @@ function App() {
               >
                 Oyuncuyu Sil
               </button>
-
-              {scores[player.id] && (
-                <div className="mt-6 bg-zinc-800 rounded-2xl p-4">
-                  <h3 className="text-xl font-bold mb-3">Transfer Sonucu</h3>
-                  <p>Skor: {scores[player.id].transfer_index}</p>
-                  <p>Risk: {scores[player.id].risk_level}</p>
-                  <div className="mt-4 space-y-2 text-sm text-zinc-300">
-                    <p>
-                      Performans: {scores[player.id].scores.performance}/100
-                    </p>
-                    <p>
-                      Taktik Uyum: {scores[player.id].scores.tactical_fit}/100
-                    </p>
-                    <p>Finansal: {scores[player.id].scores.financial}/100</p>
-                    <p>Risk Skoru: {scores[player.id].scores.risk}/100</p>
-                  </div>
-                </div>
-              )}
             </div>
           ))}
         </div>
       </div>
+
+      {selectedPlayer && scores[selectedPlayer.id] && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-3xl p-8 max-w-2xl w-full">
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <h2 className="text-3xl font-bold">{selectedPlayer.name}</h2>
+                <p className="text-zinc-400">
+                  {selectedPlayer.club} • {selectedPlayer.position}
+                </p>
+              </div>
+
+              <button
+                onClick={() => setSelectedPlayer(null)}
+                className="text-zinc-400 hover:text-white text-2xl"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="text-5xl font-bold text-yellow-400 mb-4">
+              {scores[selectedPlayer.id].transfer_index}/100
+            </div>
+
+            <p className="mb-6 text-red-400">
+              {scores[selectedPlayer.id].risk_level}
+            </p>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-zinc-800 rounded-2xl p-4">
+                Performans: {scores[selectedPlayer.id].scores.performance}/100
+              </div>
+              <div className="bg-zinc-800 rounded-2xl p-4">
+                Taktik Uyum: {scores[selectedPlayer.id].scores.tactical_fit}/100
+              </div>
+              <div className="bg-zinc-800 rounded-2xl p-4">
+                Finansal: {scores[selectedPlayer.id].scores.financial}/100
+              </div>
+              <div className="bg-zinc-800 rounded-2xl p-4">
+                Risk: {scores[selectedPlayer.id].scores.risk}/100
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
