@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models.transfer import TransferRequest, PlayerData
+from app.models.transfer import TransferRequest, PlayerData, TeamNeed
 from app.models.player_db import PlayerDB
 from app.services.scoring_engine import TransferIndexEngine
 
@@ -39,4 +39,35 @@ def get_players(db: Session = Depends(get_db)):
 
 @router.get("/players/{player_id}")
 def get_player(player_id: int, db: Session = Depends(get_db)):
-    return db.query(PlayerDB).filter(PlayerDB.id == player_id).first()
+    player = db.query(PlayerDB).filter(PlayerDB.id == player_id).first()
+
+    if not player:
+        return {"error": "Player not found"}
+
+    return player
+
+
+@router.post("/players/{player_id}/transfer-score")
+def calculate_player_transfer_score(
+    player_id: int,
+    team: TeamNeed,
+    db: Session = Depends(get_db)
+):
+    player = db.query(PlayerDB).filter(PlayerDB.id == player_id).first()
+
+    if not player:
+        return {"error": "Player not found"}
+
+    return engine.calculate(player, team)
+
+@router.delete("/players/{player_id}")
+def delete_player(player_id: int, db: Session = Depends(get_db)):
+    player = db.query(PlayerDB).filter(PlayerDB.id == player_id).first()
+
+    if not player:
+        return {"error": "Player not found"}
+
+    db.delete(player)
+    db.commit()
+
+    return {"message": f"Player {player_id} deleted"}
