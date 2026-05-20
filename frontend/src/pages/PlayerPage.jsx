@@ -6,6 +6,8 @@ function PlayerPage() {
 
   const [player, setPlayer] = useState(null);
   const [score, setScore] = useState(null);
+  const [aiReport, setAiReport] = useState(null);
+  const [loadingAi, setLoadingAi] = useState(false);
 
   useEffect(() => {
     fetch(`http://127.0.0.1:8000/players/${id}`)
@@ -15,7 +17,11 @@ function PlayerPage() {
   }, [id]);
 
   const analyzeTransfer = async () => {
-    const response = await fetch(
+    setScore(null);
+    setAiReport(null);
+    setLoadingAi(true);
+
+    const scoreResponse = await fetch(
       `http://127.0.0.1:8000/players/${id}/transfer-score`,
       {
         method: "POST",
@@ -33,8 +39,19 @@ function PlayerPage() {
       },
     );
 
-    const data = await response.json();
-    setScore(data);
+    const scoreData = await scoreResponse.json();
+    setScore(scoreData);
+
+    const aiResponse = await fetch(
+      `http://127.0.0.1:8000/players/${id}/ai-report`,
+      {
+        method: "POST",
+      },
+    );
+
+    const aiData = await aiResponse.json();
+    setAiReport(aiData.report);
+    setLoadingAi(false);
   };
 
   if (!player) {
@@ -99,9 +116,7 @@ function PlayerPage() {
 
               <div className="space-y-3 text-zinc-300">
                 <p>Sakatlık Günü: {player.injury_days}</p>
-
                 <p>Yaş Riski: {player.age > 30 ? "Yüksek" : "Düşük"}</p>
-
                 <p>Maç Sürekliliği: {player.matches >= 25 ? "İyi" : "Düşük"}</p>
               </div>
             </div>
@@ -114,57 +129,66 @@ function PlayerPage() {
             Fenerbahçe Transfer Index Hesapla
           </button>
 
-          {score && (
+          {(score || loadingAi) && (
             <div className="mt-8 bg-zinc-950 border border-yellow-500/30 rounded-3xl p-8">
               <h2 className="text-3xl font-black mb-4">
                 Fenerbahçe Transfer Index
               </h2>
 
-              <div className="text-7xl font-black text-yellow-400 mb-5">
-                {score.transfer_index}/100
-              </div>
+              {score && (
+                <>
+                  <div className="text-7xl font-black text-yellow-400 mb-5">
+                    {score.transfer_index}/100
+                  </div>
 
-              <p className="text-red-400 mb-8 text-lg">{score.risk_level}</p>
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-zinc-900 rounded-2xl p-5">
-                  <p className="text-zinc-400 mb-2">Performans</p>
-
-                  <p className="text-3xl font-bold">
-                    {score.scores.performance}
+                  <p className="text-red-400 mb-8 text-lg">
+                    {score.risk_level}
                   </p>
-                </div>
 
-                <div className="bg-zinc-900 rounded-2xl p-5">
-                  <p className="text-zinc-400 mb-2">Taktik Uyum</p>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-zinc-900 rounded-2xl p-5">
+                      <p className="text-zinc-400 mb-2">Performans</p>
+                      <p className="text-3xl font-bold">
+                        {score.scores.performance}
+                      </p>
+                    </div>
 
-                  <p className="text-3xl font-bold">
-                    {score.scores.tactical_fit}
-                  </p>
-                </div>
+                    <div className="bg-zinc-900 rounded-2xl p-5">
+                      <p className="text-zinc-400 mb-2">Taktik Uyum</p>
+                      <p className="text-3xl font-bold">
+                        {score.scores.tactical_fit}
+                      </p>
+                    </div>
 
-                <div className="bg-zinc-900 rounded-2xl p-5">
-                  <p className="text-zinc-400 mb-2">Finansal</p>
+                    <div className="bg-zinc-900 rounded-2xl p-5">
+                      <p className="text-zinc-400 mb-2">Finansal</p>
+                      <p className="text-3xl font-bold">
+                        {score.scores.financial}
+                      </p>
+                    </div>
 
-                  <p className="text-3xl font-bold">{score.scores.financial}</p>
-                </div>
-
-                <div className="bg-zinc-900 rounded-2xl p-5">
-                  <p className="text-zinc-400 mb-2">Risk</p>
-
-                  <p className="text-3xl font-bold">{score.scores.risk}</p>
-                </div>
-              </div>
+                    <div className="bg-zinc-900 rounded-2xl p-5">
+                      <p className="text-zinc-400 mb-2">Risk</p>
+                      <p className="text-3xl font-bold">{score.scores.risk}</p>
+                    </div>
+                  </div>
+                </>
+              )}
 
               <div className="mt-8 bg-zinc-900 rounded-3xl p-6">
                 <h3 className="text-2xl font-bold mb-4">AI Scout Yorumu</h3>
 
-                <p className="text-zinc-300 leading-8">
-                  Bu oyuncu Fenerbahçe'nin geçiş oyununa uygun profile sahip.
-                  Hücum üretkenliği yüksek ve yaş profili ideal seviyede. Ancak
-                  maaş maliyeti ve piyasa değeri sebebiyle transferin finansal
-                  riski orta seviyede değerlendiriliyor.
-                </p>
+                {loadingAi && (
+                  <p className="text-zinc-400">
+                    AI scout raporu hazırlanıyor...
+                  </p>
+                )}
+
+                {aiReport && (
+                  <p className="text-zinc-300 leading-8 whitespace-pre-line">
+                    {aiReport}
+                  </p>
+                )}
               </div>
             </div>
           )}

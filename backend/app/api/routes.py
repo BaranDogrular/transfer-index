@@ -1,3 +1,4 @@
+from app.services.ai_scout import AIScoutService
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -8,7 +9,7 @@ from app.services.scoring_engine import TransferIndexEngine
 
 router = APIRouter()
 engine = TransferIndexEngine()
-
+ai_scout = AIScoutService()
 
 def get_db():
     db = SessionLocal()
@@ -71,3 +72,35 @@ def delete_player(player_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     return {"message": f"Player {player_id} deleted"}
+
+@router.post("/players/{player_id}/ai-report")
+def generate_ai_report(player_id: int, db: Session = Depends(get_db)):
+    player = db.query(PlayerDB).filter(PlayerDB.id == player_id).first()
+
+    if not player:
+        return {"error": "Player not found"}
+
+    team = {
+        "team_name": "Fenerbahçe",
+        "needed_position": player.position,
+        "max_market_value_m": 20,
+        "max_salary_m": 4,
+        "preferred_age_min": 22,
+        "preferred_age_max": 29,
+    }
+
+    class TeamObject:
+        def __init__(self, data):
+            self.__dict__.update(data)
+
+    team_object = TeamObject(team)
+
+    score_data = engine.calculate(player, team_object)
+    print(score_data)
+    report = ai_scout.generate_report(player, score_data)
+
+    return {
+        "player": player.name,
+        "report": report,
+        "score": score_data,
+    }

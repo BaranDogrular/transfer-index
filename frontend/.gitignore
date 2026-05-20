@@ -31,3 +31,5 @@ frontend/node_modules/
 __pycache__/
 *.pyc
 .env
+.env
+node_modules
