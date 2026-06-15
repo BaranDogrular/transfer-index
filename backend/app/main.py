@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
 from app.database import engine, Base
 from app.models.player_db import PlayerDB
+from app.models.player_valuation_db import PlayerValuationDB
 
 Base.metadata.create_all(bind=engine)
 

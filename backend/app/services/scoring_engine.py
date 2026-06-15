@@ -1,4 +1,5 @@
 class TransferIndexEngine:
+
     def calculate(self, player, team):
         performance_score = self._performance_score(player)
         tactical_fit_score = self._tactical_fit_score(player, team)
@@ -6,16 +7,21 @@ class TransferIndexEngine:
         risk_score = self._risk_score(player)
 
         transfer_index = (
-            performance_score * 0.35
+            performance_score * 0.40
             + tactical_fit_score * 0.25
             + financial_score * 0.20
-            + risk_score * 0.20
+            + risk_score * 0.15
+        )
+
+        transfer_index = round(
+            max(0, min(transfer_index, 100)),
+            2
         )
 
         return {
             "player": player.name,
             "target_team": team.team_name,
-            "transfer_index": round(transfer_index, 2),
+            "transfer_index": transfer_index,
             "scores": {
                 "performance": performance_score,
                 "tactical_fit": tactical_fit_score,
@@ -23,72 +29,200 @@ class TransferIndexEngine:
                 "risk": risk_score,
             },
             "risk_level": self._risk_level(transfer_index),
+            "recommendation": self._recommendation(
+                transfer_index
+            ),
         }
 
+    # PERFORMANCE
     def _performance_score(self, player):
-        if player.matches == 0:
+
+        if player.matches <= 0:
             return 0
 
-        goal_contribution = (player.goals + player.assists) / player.matches
-        expected_contribution = (player.xg + player.xa) / player.matches
-
         score = 0
-        score += min(goal_contribution * 100, 50)
-        score += min(expected_contribution * 100, 50)
 
-        return round(min(score, 100), 2)
+        goal_rate = player.goals / player.matches
+        assist_rate = player.assists / player.matches
 
+        xg_rate = player.xg / player.matches
+        xa_rate = player.xa / player.matches
+
+        # POSITION WEIGHTING
+        attacking_positions = [
+            "ST",
+            "CF",
+            "LW",
+            "RW",
+            "CAM"
+        ]
+
+        midfield_positions = [
+            "CM",
+            "CDM",
+            "LM",
+            "RM"
+        ]
+
+        defensive_positions = [
+            "CB",
+            "LB",
+            "RB",
+            "LWB",
+            "RWB"
+        ]
+
+        position = player.position.upper()
+
+        # ATTACKERS
+        if position in attacking_positions:
+            score += min(goal_rate * 120, 45)
+            score += min(assist_rate * 80, 20)
+            score += min(xg_rate * 100, 20)
+            score += min(xa_rate * 80, 15)
+
+        # MIDFIELDERS
+        elif position in midfield_positions:
+            score += min(goal_rate * 70, 20)
+            score += min(assist_rate * 100, 30)
+            score += min(xg_rate * 60, 20)
+            score += min(xa_rate * 100, 30)
+
+        # DEFENDERS
+        elif position in defensive_positions:
+            score += min(goal_rate * 40, 10)
+            score += min(assist_rate * 60, 20)
+            score += min(xg_rate * 40, 20)
+            score += min(xa_rate * 60, 20)
+            score += 30
+
+        # DEFAULT
+        else:
+            score += min(goal_rate * 100, 30)
+            score += min(assist_rate * 100, 30)
+            score += min(xg_rate * 100, 20)
+            score += min(xa_rate * 100, 20)
+
+        return round(max(0, min(score, 100)), 2)
+
+    # TACTICAL FIT
     def _tactical_fit_score(self, player, team):
-        score = 50
 
+        score = 40
+
+        # POSITION MATCH
         if player.position.upper() == team.needed_position.upper():
-            score += 35
+            score += 40
 
-        if team.preferred_age_min <= player.age <= team.preferred_age_max:
-            score += 15
+        # AGE FIT
+        if (
+            team.preferred_age_min
+            <= player.age
+            <= team.preferred_age_max
+        ):
+            score += 20
+
         elif player.age <= 30:
-            score += 5
+            score += 10
+
         else:
             score -= 10
 
         return round(max(0, min(score, 100)), 2)
 
+    # FINANCIAL
     def _financial_score(self, player, team):
+
         score = 100
 
-        if player.market_value_m > team.max_market_value_m:
-            score -= 20
+        # MARKET VALUE
+        market_ratio = (
+            player.market_value_m
+            / team.max_market_value_m
+        )
 
-        if player.salary_m > team.max_salary_m:
-            score -= 20
+        if market_ratio > 1:
+            score -= min(
+                (market_ratio - 1) * 35,
+                40
+            )
 
-        if player.contract_years_left > 2:
+        # SALARY
+        salary_ratio = (
+            player.salary_m
+            / team.max_salary_m
+        )
+
+        if salary_ratio > 1:
+            score -= min(
+                (salary_ratio - 1) * 35,
+                40
+            )
+
+        # CONTRACT
+        if player.contract_years_left >= 4:
+            score -= 15
+
+        elif player.contract_years_left >= 2:
+            score -= 8
+
+        return round(max(0, min(score, 100)), 2)
+
+    # RISK
+    def _risk_score(self, player):
+
+        score = 100
+
+        # INJURY
+        if player.injury_days > 180:
+            score -= 45
+
+        elif player.injury_days > 90:
+            score -= 30
+
+        elif player.injury_days > 30:
+            score -= 15
+
+        # AGE
+        if player.age >= 33:
+            score -= 25
+
+        elif player.age >= 30:
+            score -= 10
+
+        # MATCH FITNESS
+        if player.matches < 10:
+            score -= 25
+
+        elif player.matches < 20:
             score -= 10
 
         return round(max(0, min(score, 100)), 2)
 
-    def _risk_score(self, player):
-        score = 100
-
-        if player.injury_days > 30:
-            score -= 20
-
-        if player.injury_days > 90:
-            score -= 25
-
-        if player.age > 30:
-            score -= 15
-
-        if player.matches < 15:
-            score -= 15
-
-        return round(max(0, min(score, 100)), 2)
-
+    # RISK LEVEL
     def _risk_level(self, transfer_index):
+
+        if transfer_index >= 85:
+            return "Elite transfer target"
+
+        if transfer_index >= 75:
+            return "Strong transfer candidate"
+
+        if transfer_index >= 60:
+            return "Moderate risk / monitor closely"
+
+        if transfer_index >= 45:
+            return "High risk transfer"
+
+        return "Very high risk / not recommended"
+
+    # FINAL RECOMMENDATION
+    def _recommendation(self, transfer_index):
+
         if transfer_index >= 80:
-            return "Düşük risk / yüksek uygunluk"
+            return "Transfer önerilir"
+
         if transfer_index >= 65:
-            return "Orta risk / izlenebilir transfer"
-        if transfer_index >= 50:
-            return "Yüksek risk / dikkatli olunmalı"
-        return "Çok yüksek risk / önerilmez"
+            return "Dikkatli izlenmeli"
+
+        return "Transfer önerilmez"
