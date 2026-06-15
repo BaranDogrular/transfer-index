@@ -2,6 +2,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Home from "./pages/Home";
 import PlayerPage from "./pages/PlayerPage";
 import Scouting from "./pages/Scouting";
+import ComparePage from "./pages/ComparePage";
+import ClubPage from "./pages/ClubPage";
 
 function App() {
   return (
@@ -10,6 +12,8 @@ function App() {
         <Route path="/" element={<Home />} />
         <Route path="/player/:id" element={<PlayerPage />} />
         <Route path="/scouting" element={<Scouting />} />
+        <Route path="/compare" element={<ComparePage />} />
+        <Route path="/club/:clubIdOrName" element={<ClubPage />} />
       </Routes>
     </BrowserRouter>
   );

@@ -11,6 +11,8 @@ from app.models.player_db import PlayerDB
 from app.services.scoring_engine import TransferIndexEngine
 from app.services.ai_scout import AIScoutService
 from app.models.player_valuation_db import PlayerValuationDB
+from app.models.player_transfer_db import PlayerTransferDB
+from app.models.club_db import ClubDB
 from app.schemas.player_valuation import PlayerValuationResponse, PlayerValuationItem
 
 
@@ -125,6 +127,114 @@ def get_players(db: Session = Depends(get_db)):
     return {
         "count": len(players),
         "players": players,
+    }
+
+
+@router.get("/clubs/{club_id_or_name}")
+def get_club(club_id_or_name: str, db: Session = Depends(get_db)):
+    club = None
+
+    if club_id_or_name.isdigit():
+        club = (
+            db.query(ClubDB)
+            .filter(ClubDB.club_id == int(club_id_or_name))
+            .first()
+        )
+
+    if not club:
+        normalized_name = club_id_or_name.replace("-", " ").strip()
+        club = (
+            db.query(ClubDB)
+            .filter(ClubDB.name.ilike(normalized_name))
+            .first()
+        )
+
+    club_name = club.name if club else club_id_or_name.replace("-", " ").strip()
+
+    players = (
+        db.query(PlayerDB)
+        .filter(PlayerDB.club.ilike(club_name))
+        .order_by(PlayerDB.market_value_m.desc().nullslast(), PlayerDB.name.asc())
+        .all()
+    )
+
+    if not club and not players:
+        raise HTTPException(status_code=404, detail="Club not found")
+
+    player_items = [
+        {
+            "id": player.id,
+            "name": player.name,
+            "position": player.position,
+            "age": player.age,
+            "market_value_m": player.market_value_m,
+            "image_url": player.image_url,
+        }
+        for player in players
+    ]
+
+    market_values = [
+        player.market_value_m
+        for player in players
+        if player.market_value_m is not None
+    ]
+    ages = [player.age for player in players if player.age is not None and player.age > 0]
+    total_market_value = sum(market_values) if market_values else None
+    average_age = round(sum(ages) / len(ages), 1) if ages else None
+
+    return {
+        "club_id": club.club_id if club else None,
+        "club_name": club_name,
+        "country": club.country if club else None,
+        "league": club.league if club else None,
+        "squad_count": len(players) if players else club.squad_size if club else 0,
+        "average_age": average_age if average_age is not None else club.average_age if club else None,
+        "total_market_value": total_market_value,
+        "top_players_by_value": player_items[:5],
+        "players": player_items,
+    }
+
+
+@router.get("/players/compare")
+def compare_players(
+    player1_id: int,
+    player2_id: int,
+    db: Session = Depends(get_db),
+):
+    player1 = db.query(PlayerDB).filter(PlayerDB.id == player1_id).first()
+    player2 = db.query(PlayerDB).filter(PlayerDB.id == player2_id).first()
+
+    if not player1 or not player2:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    def serialize_player(player):
+        return {
+            "id": player.id,
+            "name": player.name,
+            "image_url": player.image_url,
+            "club": player.club,
+            "league": player.league,
+            "position": player.position,
+            "age": player.age,
+            "height": player.height_cm,
+            "preferred_foot": player.preferred_foot,
+            "market_value_m": player.market_value_m,
+            "contract_expiration_date": player.contract_expiration_date,
+            "matches": player.matches,
+            "goals": player.goals,
+            "assists": player.assists,
+            "minutes_played": player.minutes_played,
+            "goals_per_90": player.goals_per_90,
+            "assists_per_90": player.assists_per_90,
+            "goal_contributions": player.goal_contributions,
+            "goal_contributions_per_90": player.goal_contributions_per_90,
+            "yellow_cards": player.yellow_cards,
+            "red_cards": player.red_cards,
+        }
+
+    return {
+        "player1": serialize_player(player1),
+        "player2": serialize_player(player2),
     }
 
 
@@ -294,3 +404,85 @@ def get_player_valuations(player_id: int, db: Session = Depends(get_db)):
         growth_percent=growth_percent,
         history=history,
     )
+
+
+@router.get("/players/{player_id}/transfers")
+def get_player_transfers(player_id: int, db: Session = Depends(get_db)):
+    player = db.query(PlayerDB).filter(PlayerDB.id == player_id).first()
+
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    transfers = (
+        db.query(PlayerTransferDB)
+        .filter(PlayerTransferDB.player_id == player_id)
+        .order_by(
+            PlayerTransferDB.transfer_date.desc().nullslast(),
+            PlayerTransferDB.id.desc(),
+        )
+        .all()
+    )
+
+    def format_transfer_fee(value):
+        if value is None or value <= 0:
+            return None
+
+        if value >= 1000000:
+            return f"€{value / 1000000:.1f}M"
+
+        if value >= 1000:
+            return f"€{value / 1000:.0f}K"
+
+        return f"€{value}"
+
+    def get_transfer_label(transfer):
+        transfer_type = (transfer.transfer_type or "").strip().lower()
+
+        if transfer_type in {"loan", "loaned"}:
+            return "Kiralık"
+
+        if transfer_type in {"loan return", "end of loan"}:
+            return "Kiralıktan geri döndü"
+
+        if transfer_type in {"free transfer", "free", "ablöse yok"}:
+            return "Bedelsiz"
+
+        fee = transfer.transfer_fee_in_eur
+        if fee is None:
+            fee = transfer.transfer_fee
+
+        formatted_fee = format_transfer_fee(fee)
+        if formatted_fee:
+            return formatted_fee
+
+        return "-"
+
+    transfer_items = [
+        {
+            "id": item.id,
+            "player_id": item.player_id,
+            "transfer_date": item.transfer_date,
+            "transfer_season": item.transfer_season,
+            "from_club_id": item.from_club_id,
+            "to_club_id": item.to_club_id,
+            "from_club_name": item.from_club_name,
+            "to_club_name": item.to_club_name,
+            "from_club_country": item.from_club_country,
+            "to_club_country": item.to_club_country,
+            "transfer_type": item.transfer_type,
+            "transfer_fee_text": item.transfer_fee_text,
+            "transfer_fee": item.transfer_fee,
+            "transfer_fee_in_eur": item.transfer_fee_in_eur,
+            "formatted_transfer_fee": format_transfer_fee(item.transfer_fee_in_eur),
+            "transfer_label": get_transfer_label(item),
+            "market_value_in_eur": item.market_value_in_eur,
+            "player_name": item.player_name,
+        }
+        for item in transfers
+    ]
+
+    return {
+        "player_id": player_id,
+        "count": len(transfer_items),
+        "transfers": transfer_items,
+    }

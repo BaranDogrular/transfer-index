@@ -20,6 +20,8 @@ function PlayerPage() {
 
   const [valuations, setValuations] = useState(null);
   const [valuationsLoading, setValuationsLoading] = useState(true);
+  const [transfers, setTransfers] = useState([]);
+  const [transfersLoading, setTransfersLoading] = useState(true);
 
   useEffect(() => {
     fetch(`http://127.0.0.1:8000/players/${id}`)
@@ -54,6 +56,32 @@ function PlayerPage() {
     fetchValuations();
   }, [id]);
 
+  useEffect(() => {
+    const fetchTransfers = async () => {
+      try {
+        setTransfersLoading(true);
+
+        const response = await fetch(
+          `http://127.0.0.1:8000/players/${id}/transfers`,
+        );
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch transfers");
+        }
+
+        const data = await response.json();
+        setTransfers(data.transfers || []);
+      } catch (error) {
+        console.error(error);
+        setTransfers([]);
+      } finally {
+        setTransfersLoading(false);
+      }
+    };
+
+    fetchTransfers();
+  }, [id]);
+
   const formatValue = (value, suffix = "") => {
     if (!value || value === 0 || value === "0") {
       return "-";
@@ -68,6 +96,37 @@ function PlayerPage() {
     }
 
     return `€${Number(value).toFixed(2)}M`;
+  };
+
+  const formatInteger = (value) => {
+    if (value === null || value === undefined || value === "") {
+      return "-";
+    }
+
+    const numberValue = Number(value);
+
+    if (!Number.isFinite(numberValue)) {
+      return "-";
+    }
+
+    return numberValue.toLocaleString();
+  };
+
+  const formatDecimal = (value, digits = 2) => {
+    if (value === null || value === undefined || value === "") {
+      return "-";
+    }
+
+    const numberValue = Number(value);
+
+    if (!Number.isFinite(numberValue)) {
+      return "-";
+    }
+
+    return numberValue.toLocaleString(undefined, {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    });
   };
 
   const formatEuroRaw = (value) => {
@@ -97,6 +156,84 @@ function PlayerPage() {
       year: "numeric",
     });
   };
+
+  const formatText = (value) => {
+    if (value === null || value === undefined || value === "") {
+      return "-";
+    }
+
+    return value;
+  };
+
+  const formatTransferMoney = (value) => {
+    if (value === null || value === undefined || value === "") {
+      return "-";
+    }
+
+    const numberValue = Number(value);
+
+    if (!Number.isFinite(numberValue)) {
+      return "-";
+    }
+
+    if (numberValue >= 1000000) {
+      return `€${(numberValue / 1000000).toFixed(1)}M`;
+    }
+
+    if (numberValue >= 1000) {
+      return `€${(numberValue / 1000).toFixed(0)}K`;
+    }
+
+    return `€${numberValue}`;
+  };
+
+  const formatTransferFee = (transfer) => {
+    const typeLabels = {
+      loan: "Kiralık",
+      loaned: "Kiralık",
+      "loan return": "Kiralıktan geri döndü",
+      "end of loan": "Kiralıktan geri döndü",
+      "free transfer": "Bedelsiz",
+      free: "Bedelsiz",
+      "ablöse yok": "Bedelsiz",
+      released: "Released",
+    };
+
+    if (transfer.transfer_label) {
+      return transfer.transfer_label;
+    }
+
+    const transferType = transfer.transfer_type?.toLowerCase();
+
+    if (transferType && typeLabels[transferType]) {
+      return typeLabels[transferType];
+    }
+
+    const fee = transfer.transfer_fee_in_eur ?? transfer.transfer_fee;
+
+    if (fee === null || fee === undefined || fee === "") {
+      return "-";
+    }
+
+    if (Number(fee) <= 0) {
+      return "-";
+    }
+
+    return formatTransferMoney(fee);
+  };
+
+  const renderClubCell = (clubName, country) => (
+    <div className="flex min-w-0 flex-col">
+      <span className="truncate font-semibold text-zinc-100">
+        {formatText(clubName)}
+      </span>
+      {country && (
+        <span className="mt-1 truncate text-xs uppercase tracking-wide text-zinc-500">
+          {country}
+        </span>
+      )}
+    </div>
+  );
 
   const getRecommendation = () => {
     if (!score) return null;
@@ -240,7 +377,17 @@ function PlayerPage() {
                 </h1>
 
                 <p className="mt-4 text-zinc-400 text-lg">
-                  {player.club || "Unknown Club"} •{" "}
+                  {player.club ? (
+                    <Link
+                      to={`/club/${encodeURIComponent(player.club)}`}
+                      className="hover:text-cyan-300 transition-colors"
+                    >
+                      {player.club}
+                    </Link>
+                  ) : (
+                    "Unknown Club"
+                  )}{" "}
+                  •{" "}
                   {player.league || "Unknown League"}
                 </p>
 
@@ -300,6 +447,13 @@ function PlayerPage() {
               >
                 {loadingAi ? "Analyzing..." : "Analyze Transfer"}
               </button>
+
+              <Link
+                to={`/compare?player1_id=${player.id}`}
+                className="mt-3 w-64 py-4 rounded-2xl bg-white/10 hover:bg-white/15 text-center font-black text-white transition-all"
+              >
+                Compare Player
+              </Link>
             </div>
           </div>
 
@@ -409,6 +563,73 @@ function PlayerPage() {
             )}
           </div>
 
+          <div className="mt-10 bg-black/40 rounded-3xl p-8 border border-white/5">
+            <div className="mb-8">
+              <h2 className="text-3xl font-black">Career Transfer History</h2>
+              <p className="text-zinc-400 mt-2">
+                Club moves ordered by latest transfer date
+              </p>
+            </div>
+
+            {transfersLoading ? (
+              <div className="h-40 flex items-center justify-center text-zinc-400 animate-pulse">
+                Loading transfer history...
+              </div>
+            ) : transfers.length === 0 ? (
+              <div className="h-40 flex items-center justify-center text-zinc-500">
+                No transfer history found
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-2xl border border-white/5">
+                <div className="min-w-[980px]">
+                  <div className="grid grid-cols-[110px_130px_minmax(220px,1fr)_minmax(220px,1fr)_150px_170px] bg-zinc-950/90 px-5 py-3 text-xs font-bold uppercase tracking-wide text-zinc-500">
+                    <div>Season</div>
+                    <div>Date</div>
+                    <div>From Club</div>
+                    <div>To Club</div>
+                    <div>Market Value</div>
+                    <div>Transfer Fee / Type</div>
+                  </div>
+
+                  <div className="divide-y divide-white/5">
+                    {transfers.map((transfer) => (
+                      <div
+                        key={transfer.id}
+                        className="grid grid-cols-[110px_130px_minmax(220px,1fr)_minmax(220px,1fr)_150px_170px] items-center px-5 py-4 text-sm text-zinc-300 transition-colors hover:bg-white/[0.03]"
+                      >
+                        <div className="font-semibold text-zinc-100">
+                          {formatText(transfer.transfer_season)}
+                        </div>
+
+                        <div className="text-zinc-400">
+                          {formatContractDate(transfer.transfer_date)}
+                        </div>
+
+                        {renderClubCell(
+                          transfer.from_club_name,
+                          transfer.from_club_country,
+                        )}
+
+                        {renderClubCell(
+                          transfer.to_club_name,
+                          transfer.to_club_country,
+                        )}
+
+                        <div className="font-semibold text-zinc-100">
+                          {formatTransferMoney(transfer.market_value_in_eur)}
+                        </div>
+
+                        <div className="font-semibold text-cyan-300">
+                          {formatTransferFee(transfer)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-10">
             <div className="bg-black/40 rounded-3xl p-6 border border-white/5">
               <h2 className="text-2xl font-bold mb-6">Performance 24/25</h2>
@@ -416,28 +637,49 @@ function PlayerPage() {
               <div className="space-y-4 text-zinc-300">
                 <div className="flex justify-between">
                   <span>Matches</span>
-                  <span>{formatValue(player.matches)}</span>
+                  <span>{formatInteger(player.matches)}</span>
                 </div>
 
                 <div className="flex justify-between">
                   <span>Goals</span>
-                  <span>{formatValue(player.goals)}</span>
+                  <span>{formatInteger(player.goals)}</span>
                 </div>
 
                 <div className="flex justify-between">
                   <span>Assists</span>
-                  <span>{formatValue(player.assists)}</span>
+                  <span>{formatInteger(player.assists)}</span>
                 </div>
 
                 <div className="flex justify-between">
-                  <span>xG</span>
-                  <span>{formatValue(player.xg)}</span>
+                  <span>Minutes</span>
+                  <span>{formatInteger(player.minutes_played)}</span>
                 </div>
 
                 <div className="flex justify-between">
-                  <span>xA</span>
-                  <span>{formatValue(player.xa)}</span>
+                  <span>Goals / 90</span>
+                  <span>{formatDecimal(player.goals_per_90)}</span>
                 </div>
+
+                <div className="flex justify-between">
+                  <span>Assists / 90</span>
+                  <span>{formatDecimal(player.assists_per_90)}</span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span>Min / Goal</span>
+                  <span>{formatDecimal(player.minutes_per_goal, 1)}</span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span>Yellow Cards</span>
+                  <span>{formatInteger(player.yellow_cards)}</span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span>Red Cards</span>
+                  <span>{formatInteger(player.red_cards)}</span>
+                </div>
+
               </div>
             </div>
 
@@ -488,7 +730,18 @@ function PlayerPage() {
 
                 <div className="flex justify-between">
                   <span>Club</span>
-                  <span>{player.club || "-"}</span>
+                  <span>
+                    {player.club ? (
+                      <Link
+                        to={`/club/${encodeURIComponent(player.club)}`}
+                        className="text-cyan-300 hover:text-cyan-200 transition-colors"
+                      >
+                        {player.club}
+                      </Link>
+                    ) : (
+                      "-"
+                    )}
+                  </span>
                 </div>
 
                 <div className="flex justify-between">

@@ -24,6 +24,14 @@ class PlayerData(BaseModel):
     goals: int
     assists: int
     matches: int
+    minutes_played: int | None = None
+    yellow_cards: int | None = None
+    red_cards: int | None = None
+    goals_per_90: float | None = None
+    assists_per_90: float | None = None
+    goal_contributions: int | None = None
+    goal_contributions_per_90: float | None = None
+    minutes_per_goal: float | None = None
 
     xg: float
     xa: float

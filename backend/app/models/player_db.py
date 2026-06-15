@@ -36,6 +36,14 @@ class PlayerDB(Base):
     goals = Column(Integer)
     assists = Column(Integer)
     matches = Column(Integer)
+    minutes_played = Column(Integer)
+    yellow_cards = Column(Integer)
+    red_cards = Column(Integer)
+    goals_per_90 = Column(Float)
+    assists_per_90 = Column(Float)
+    goal_contributions = Column(Integer)
+    goal_contributions_per_90 = Column(Float)
+    minutes_per_goal = Column(Float)
 
     xg = Column(Float)
     xa = Column(Float)
@@ -52,6 +60,12 @@ class PlayerDB(Base):
     # VALUE HISTORY
     valuations = relationship(
         "PlayerValuationDB",
+        back_populates="player",
+        cascade="all, delete-orphan",
+    )
+
+    transfers = relationship(
+        "PlayerTransferDB",
         back_populates="player",
         cascade="all, delete-orphan",
     )

@@ -3,6 +3,7 @@ import pandas as pd
 from app.database import SessionLocal
 from app.models.player_db import PlayerDB
 from app.models.player_valuation_db import PlayerValuationDB
+from app.models.player_transfer_db import PlayerTransferDB
 
 print("PLAYER SEASON STATS IMPORT STARTED")
 
@@ -21,6 +22,15 @@ def safe_int(value, default=0):
         return default
 
 
+def safe_float(value):
+    try:
+        if pd.isna(value):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
 def import_player_stats():
     db = SessionLocal()
 
@@ -36,6 +46,8 @@ def import_player_stats():
             "player_id",
             "goals",
             "assists",
+            "yellow_cards",
+            "red_cards",
             "minutes_played",
             "appearance_id",
         }
@@ -70,11 +82,25 @@ def import_player_stats():
             how="left",
         )
 
-        season_df = merged_df[merged_df["season"] == TARGET_SEASON]
+        season_df = merged_df[merged_df["season"] == TARGET_SEASON].copy()
 
         print(f"Season appearance rows: {len(season_df)}")
 
         print("Aggregating player season stats...")
+
+        stat_columns = [
+            "goals",
+            "assists",
+            "yellow_cards",
+            "red_cards",
+            "minutes_played",
+        ]
+
+        for column in stat_columns:
+            season_df.loc[:, column] = pd.to_numeric(
+                season_df[column],
+                errors="coerce",
+            ).fillna(0)
 
         stats_df = (
             season_df.groupby("player_id")
@@ -82,9 +108,40 @@ def import_player_stats():
                 matches=("appearance_id", "count"),
                 goals=("goals", "sum"),
                 assists=("assists", "sum"),
+                yellow_cards=("yellow_cards", "sum"),
+                red_cards=("red_cards", "sum"),
                 minutes_played=("minutes_played", "sum"),
             )
             .reset_index()
+        )
+
+        stats_df["goal_contributions"] = stats_df["goals"] + stats_df["assists"]
+        stats_df["goals_per_90"] = stats_df.apply(
+            lambda row: round((row["goals"] / row["minutes_played"]) * 90, 2)
+            if row["minutes_played"] > 0
+            else None,
+            axis=1,
+        )
+        stats_df["assists_per_90"] = stats_df.apply(
+            lambda row: round((row["assists"] / row["minutes_played"]) * 90, 2)
+            if row["minutes_played"] > 0
+            else None,
+            axis=1,
+        )
+        stats_df["goal_contributions_per_90"] = stats_df.apply(
+            lambda row: round(
+                (row["goal_contributions"] / row["minutes_played"]) * 90,
+                2,
+            )
+            if row["minutes_played"] > 0
+            else None,
+            axis=1,
+        )
+        stats_df["minutes_per_goal"] = stats_df.apply(
+            lambda row: round(row["minutes_played"] / row["goals"], 1)
+            if row["goals"] > 0
+            else None,
+            axis=1,
         )
 
         print(f"Aggregated players: {len(stats_df)}")
@@ -112,6 +169,16 @@ def import_player_stats():
             player.matches = safe_int(row.get("matches"))
             player.goals = safe_int(row.get("goals"))
             player.assists = safe_int(row.get("assists"))
+            player.minutes_played = safe_int(row.get("minutes_played"))
+            player.yellow_cards = safe_int(row.get("yellow_cards"))
+            player.red_cards = safe_int(row.get("red_cards"))
+            player.goals_per_90 = safe_float(row.get("goals_per_90"))
+            player.assists_per_90 = safe_float(row.get("assists_per_90"))
+            player.goal_contributions = safe_int(row.get("goal_contributions"))
+            player.goal_contributions_per_90 = safe_float(
+                row.get("goal_contributions_per_90")
+            )
+            player.minutes_per_goal = safe_float(row.get("minutes_per_goal"))
 
             updated += 1
 
