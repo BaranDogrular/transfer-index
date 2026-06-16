@@ -38,6 +38,8 @@ class PlayerAdvancedStatsDB(Base):
     season = Column(String, nullable=False, index=True)
     source = Column(String, nullable=False, default="fbref", index=True)
 
+    matches = Column(Integer, nullable=True)
+    starts = Column(Integer, nullable=True)
     minutes = Column(Integer, nullable=True)
     goals = Column(Integer, nullable=True)
     assists = Column(Integer, nullable=True)
@@ -58,6 +60,13 @@ class PlayerAdvancedStatsDB(Base):
     blocks = Column(Float, nullable=True)
     aerials_won = Column(Float, nullable=True)
     aerials_lost = Column(Float, nullable=True)
+    yellow_cards = Column(Integer, nullable=True)
+    red_cards = Column(Integer, nullable=True)
+    clean_sheets = Column(Integer, nullable=True)
+    saves = Column(Integer, nullable=True)
+    save_percentage = Column(Float, nullable=True)
+    goals_against = Column(Integer, nullable=True)
+    pass_completion = Column(Float, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     player = relationship(

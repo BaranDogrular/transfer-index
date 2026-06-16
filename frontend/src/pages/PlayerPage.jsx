@@ -10,6 +10,207 @@ import {
   CartesianGrid,
 } from "recharts";
 
+const ADVANCED_STAT_TOOLTIPS = {
+  minutes: "Toplam oynanan dakika.",
+  clean_sheets: "Clean Sheets. Kalecinin gol yemeden tamamladığı maç sayısı.",
+  saves: "Saves. Kalecinin kurtardığı şut sayısı.",
+  save_percentage: "Save %. Kaleye gelen isabetli şutlarda kurtarış oranı.",
+  goals_against: "Goals Against. Kalecinin yediği toplam gol sayısı.",
+  pass_completion: "Pass Completion. Başarılı pasların toplam paslara oranı.",
+  goals: "Goals. Oyuncunun attığı toplam gol.",
+  assists: "Assists. Oyuncunun yaptığı toplam asist.",
+  xg: "Expected Goals. Bir oyuncunun şutlarının gol olma olasılığı.",
+  xa: "Expected Assists. Pasların beklenen asist değeri.",
+  npxg: "Penaltılar hariç beklenen gol.",
+  shots: "Shots. Oyuncunun denediği toplam şut.",
+  shots_on_target: "Shots On Target. Kaleyi bulan şutlar.",
+  key_passes: "Key Pass. Şutla sonuçlanan pas.",
+  progressive_passes: "Takımı rakip kaleye anlamlı şekilde ilerleten paslar.",
+  progressive_carries: "Topu sürerek rakip kaleye önemli mesafe taşıma.",
+  passes_into_final_third: "Rakip son üçte birlik bölgeye gönderilen paslar.",
+  passes_into_penalty_area: "Ceza sahasına gönderilen başarılı paslar.",
+  shot_creating_actions: "Shot Creating Actions. Şutla sonuçlanan hücum aksiyonları.",
+  goal_creating_actions: "Goal Creating Actions. Gol ile sonuçlanan hücum aksiyonları.",
+  tackles: "Tackles. Oyuncunun yaptığı müdahale sayısı.",
+  interceptions: "Interceptions. Oyuncunun kestiği paslar.",
+  blocks: "Engellenen şut veya pas aksiyonları.",
+  aerials_won: "Aerial Won. Kazanılan hava topu mücadeleleri.",
+};
+
+const POSITION_ADVANCED_STATS = {
+  GOALKEEPER: [
+    "minutes",
+    "clean_sheets",
+    "saves",
+    "save_percentage",
+    "goals_against",
+    "pass_completion",
+  ],
+  CENTRE_BACK: [
+    "minutes",
+    "tackles",
+    "interceptions",
+    "blocks",
+    "aerials_won",
+    "progressive_passes",
+  ],
+  FULL_BACK: [
+    "tackles",
+    "interceptions",
+    "progressive_carries",
+    "progressive_passes",
+    "key_passes",
+    "assists",
+    "xa",
+  ],
+  DEFENSIVE_MIDFIELDER: [
+    "tackles",
+    "interceptions",
+    "progressive_passes",
+    "key_passes",
+    "passes_into_final_third",
+  ],
+  CENTRAL_MIDFIELDER: [
+    "assists",
+    "xa",
+    "progressive_passes",
+    "progressive_carries",
+    "key_passes",
+    "shot_creating_actions",
+    "goal_creating_actions",
+  ],
+  ATTACKING_MIDFIELDER: [
+    "goals",
+    "assists",
+    "xg",
+    "xa",
+    "key_passes",
+    "shot_creating_actions",
+    "goal_creating_actions",
+    "progressive_carries",
+  ],
+  WINGER: [
+    "goals",
+    "assists",
+    "xg",
+    "xa",
+    "shots",
+    "shots_on_target",
+    "progressive_carries",
+    "key_passes",
+  ],
+  STRIKER: [
+    "goals",
+    "xg",
+    "npxg",
+    "shots",
+    "shots_on_target",
+    "goal_creating_actions",
+    "shot_creating_actions",
+  ],
+};
+
+const POSITION_GROUP_LABELS = {
+  GOALKEEPER: "Goalkeeper View",
+  CENTRE_BACK: "Centre Back View",
+  FULL_BACK: "Full Back View",
+  DEFENSIVE_MIDFIELDER: "Defensive Midfielder View",
+  CENTRAL_MIDFIELDER: "Central Midfielder View",
+  ATTACKING_MIDFIELDER: "Attacking Midfielder View",
+  WINGER: "Winger View",
+  STRIKER: "Striker View",
+};
+
+const normalizePositionText = (position) =>
+  String(position || "")
+    .toLowerCase()
+    .replace(/[-_/]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const getPositionGroup = (position) => {
+  const normalized = normalizePositionText(position);
+
+  if (normalized.includes("goalkeeper")) {
+    return "GOALKEEPER";
+  }
+
+  if (
+    normalized.includes("centre back") ||
+    normalized.includes("center back")
+  ) {
+    return "CENTRE_BACK";
+  }
+
+  if (
+    normalized.includes("left back") ||
+    normalized.includes("right back") ||
+    normalized.includes("full back") ||
+    normalized.includes("wing back")
+  ) {
+    return "FULL_BACK";
+  }
+
+  if (normalized.includes("defensive midfield")) {
+    return "DEFENSIVE_MIDFIELDER";
+  }
+
+  if (normalized.includes("attacking midfield")) {
+    return "ATTACKING_MIDFIELDER";
+  }
+
+  if (
+    normalized.includes("winger") ||
+    normalized.includes("left wing") ||
+    normalized.includes("right wing")
+  ) {
+    return "WINGER";
+  }
+
+  if (
+    normalized.includes("centre forward") ||
+    normalized.includes("center forward") ||
+    normalized.includes("striker") ||
+    normalized.includes("second striker") ||
+    normalized === "forward"
+  ) {
+    return "STRIKER";
+  }
+
+  if (normalized.includes("central midfield") || normalized.includes("midfield")) {
+    return "CENTRAL_MIDFIELDER";
+  }
+
+  return "CENTRAL_MIDFIELDER";
+};
+
+const getPositionAdvancedStatKeys = (position) => {
+  const positionGroup = getPositionGroup(position);
+  const keys = POSITION_ADVANCED_STATS[positionGroup] || POSITION_ADVANCED_STATS.CENTRAL_MIDFIELDER;
+
+  return Array.from(new Set(["minutes", ...keys]));
+};
+
+function StatInfoTooltip({ title, description }) {
+  if (!description) {
+    return null;
+  }
+
+  return (
+    <button
+      type="button"
+      className="group relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-cyan-400/30 bg-cyan-400/10 text-[11px] font-bold text-cyan-200 transition hover:border-cyan-300 hover:bg-cyan-400/20 focus:outline-none focus:ring-2 focus:ring-cyan-400/40"
+      aria-label={`${title} info`}
+    >
+      ⓘ
+      <span className="pointer-events-none absolute left-1/2 top-7 z-30 hidden w-64 -translate-x-1/2 rounded-xl border border-cyan-400/25 bg-zinc-950 px-3 py-2 text-left text-xs font-normal leading-5 text-zinc-300 shadow-2xl shadow-cyan-950/40 group-hover:block group-focus:block sm:left-0 sm:translate-x-0">
+        <span className="mb-1 block font-semibold text-cyan-300">{title}</span>
+        {description}
+      </span>
+    </button>
+  );
+}
+
 function PlayerPage() {
   const { id } = useParams();
 
@@ -234,6 +435,11 @@ function PlayerPage() {
       minimumFractionDigits: digits,
       maximumFractionDigits: digits,
     });
+  };
+
+  const formatPercent = (value) => {
+    const formattedValue = formatDecimal(value, 1);
+    return formattedValue === "-" ? "-" : `${formattedValue}%`;
   };
 
   const formatEuroRaw = (value) => {
@@ -549,32 +755,120 @@ function PlayerPage() {
     player.xa !== null && player.xa !== undefined && player.xa !== ""
       ? player.xa
       : advancedStats?.xa;
-  const advancedStatFields = [
-    { label: "xG", value: formatDecimal(advancedStats?.xg) },
-    { label: "xA", value: formatDecimal(advancedStats?.xa) },
-    { label: "npxG", value: formatDecimal(advancedStats?.npxg) },
-    { label: "Shots", value: formatInteger(advancedStats?.shots) },
-    {
-      label: "Shots on Target",
+  const positionGroup = getPositionGroup(player.position);
+  const advancedStatDefinitions = {
+    minutes: {
+      label: "Minutes",
+      value: formatInteger(advancedStats?.minutes),
+    },
+    clean_sheets: {
+      label: "Clean Sheets",
+      value: formatInteger(advancedStats?.clean_sheets),
+    },
+    saves: {
+      label: "Saves",
+      value: formatInteger(advancedStats?.saves),
+    },
+    save_percentage: {
+      label: "Save %",
+      value: formatPercent(advancedStats?.save_percentage),
+    },
+    goals_against: {
+      label: "Goals Against",
+      value: formatInteger(advancedStats?.goals_against),
+    },
+    pass_completion: {
+      label: "Pass Completion",
+      value: formatPercent(advancedStats?.pass_completion),
+    },
+    goals: {
+      label: "Goals",
+      value: formatInteger(advancedStats?.goals),
+    },
+    assists: {
+      label: "Assists",
+      value: formatInteger(advancedStats?.assists),
+    },
+    xg: {
+      label: "xG",
+      value: formatDecimal(advancedStats?.xg),
+    },
+    xa: {
+      label: "xA",
+      value: formatDecimal(advancedStats?.xa),
+    },
+    npxg: {
+      label: "npxG",
+      value: formatDecimal(advancedStats?.npxg),
+    },
+    shots: {
+      label: "Shots",
+      value: formatInteger(advancedStats?.shots),
+    },
+    shots_on_target: {
+      label: "Shots On Target",
       value: formatInteger(advancedStats?.shots_on_target),
     },
-    { label: "Key Passes", value: formatInteger(advancedStats?.key_passes) },
-    {
+    key_passes: {
+      label: "Key Passes",
+      value: formatInteger(advancedStats?.key_passes),
+    },
+    progressive_passes: {
       label: "Progressive Passes",
       value: formatInteger(advancedStats?.progressive_passes),
     },
-    {
+    progressive_carries: {
       label: "Progressive Carries",
       value: formatInteger(advancedStats?.progressive_carries),
     },
-    { label: "SCA", value: formatInteger(advancedStats?.shot_creating_actions) },
-    { label: "GCA", value: formatInteger(advancedStats?.goal_creating_actions) },
-    { label: "Tackles", value: formatInteger(advancedStats?.tackles) },
-    {
+    passes_into_final_third: {
+      label: "Passes Into Final Third",
+      value: formatInteger(advancedStats?.passes_into_final_third),
+    },
+    passes_into_penalty_area: {
+      label: "Passes Into Penalty Area",
+      value: formatInteger(advancedStats?.passes_into_penalty_area),
+    },
+    shot_creating_actions: {
+      label: "SCA",
+      value: formatInteger(advancedStats?.shot_creating_actions),
+    },
+    goal_creating_actions: {
+      label: "GCA",
+      value: formatInteger(advancedStats?.goal_creating_actions),
+    },
+    tackles: {
+      label: "Tackles",
+      value: formatInteger(advancedStats?.tackles),
+    },
+    interceptions: {
       label: "Interceptions",
       value: formatInteger(advancedStats?.interceptions),
     },
-  ];
+    blocks: {
+      label: "Blocks",
+      value: formatInteger(advancedStats?.blocks),
+    },
+    aerials_won: {
+      label: "Aerial Won",
+      value: formatInteger(advancedStats?.aerials_won),
+    },
+  };
+  const advancedStatFields = getPositionAdvancedStatKeys(player.position)
+    .map((fieldName) => {
+      const definition = advancedStatDefinitions[fieldName];
+
+      if (!definition) {
+        return null;
+      }
+
+      return {
+        ...definition,
+        key: fieldName,
+        description: ADVANCED_STAT_TOOLTIPS[fieldName],
+      };
+    })
+    .filter(Boolean);
 
   return (
     <div className="min-h-screen bg-black text-white overflow-hidden">
@@ -1021,7 +1315,12 @@ function PlayerPage() {
             </div>
 
             <div className="bg-black/40 rounded-3xl p-6 border border-white/5">
-              <h2 className="text-2xl font-bold mb-6">Advanced Stats 24/25</h2>
+              <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <h2 className="text-2xl font-bold">Advanced Stats 24/25</h2>
+                <span className="w-fit rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-xs font-semibold uppercase text-cyan-300">
+                  {POSITION_GROUP_LABELS[positionGroup]}
+                </span>
+              </div>
 
               {advancedStatsLoading ? (
                 <div className="flex h-40 items-center justify-center text-zinc-400 animate-pulse">
@@ -1031,10 +1330,16 @@ function PlayerPage() {
                 <div className="space-y-4 text-zinc-300">
                   {advancedStatFields.map((field) => (
                     <div
-                      key={field.label}
-                      className="flex justify-between gap-4"
+                      key={field.key}
+                      className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-white/5 pb-3 last:border-b-0 last:pb-0"
                     >
-                      <span>{field.label}</span>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate">{field.label}</span>
+                        <StatInfoTooltip
+                          title={field.label}
+                          description={field.description}
+                        />
+                      </span>
                       <span className="text-right font-semibold text-zinc-100">
                         {field.value}
                       </span>

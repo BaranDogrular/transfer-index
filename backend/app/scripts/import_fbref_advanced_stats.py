@@ -13,7 +13,44 @@ from app.models.player_valuation_db import PlayerValuationDB
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_PATH = os.path.join(BASE_DIR, "data", "fbref_player_stats.csv")
+UNMATCHED_CSV_PATH = os.path.join(BASE_DIR, "data", "skipped_fbref_players.csv")
 SOURCE = "fbref"
+DEFAULT_SEASON = "2024/25"
+SAMPLE_COLUMNS = [
+    "player",
+    "squad",
+    "comp",
+    "season",
+    "matches",
+    "starts",
+    "minutes",
+    "goals",
+    "assists",
+    "xg",
+    "xa",
+    "npxg",
+    "shots",
+    "shots_on_target",
+    "key_passes",
+    "progressive_passes",
+    "progressive_carries",
+    "passes_into_final_third",
+    "passes_into_penalty_area",
+    "shot_creating_actions",
+    "goal_creating_actions",
+    "tackles",
+    "interceptions",
+    "blocks",
+    "aerials_won",
+    "aerials_lost",
+    "yellow_cards",
+    "red_cards",
+    "clean_sheets",
+    "saves",
+    "save_percentage",
+    "goals_against",
+    "pass_completion",
+]
 
 
 FIELD_ALIASES = {
@@ -25,7 +62,10 @@ FIELD_ALIASES = {
     ],
     "player_name": ["player", "name", "player_name"],
     "club": ["club", "squad", "team", "current_club", "current_club_name"],
+    "league": ["comp", "competition", "league"],
     "season": ["season", "year", "season_name"],
+    "matches": ["matches", "mp", "playing_time_mp", "mp_stats_playing_time"],
+    "starts": ["starts", "playing_time_starts", "starts_stats_playing_time"],
     "minutes": ["minutes", "min", "mins", "playing_time_min"],
     "goals": ["goals", "gls", "standard_gls"],
     "assists": ["assists", "ast", "standard_ast"],
@@ -52,12 +92,30 @@ FIELD_ALIASES = {
     "goal_creating_actions": ["goal_creating_actions", "gca"],
     "tackles": ["tackles", "tkl"],
     "interceptions": ["interceptions", "int"],
-    "blocks": ["blocks", "blk"],
-    "aerials_won": ["aerials_won", "aerial_duels_won", "won"],
-    "aerials_lost": ["aerials_lost", "aerial_duels_lost", "lost"],
+    "blocks": ["blocks_stats_defense", "blocks", "block", "blk"],
+    "aerials_won": ["aerials_won", "aerial_duels_won", "won_stats_misc", "won"],
+    "aerials_lost": [
+        "aerials_lost",
+        "aerial_duels_lost",
+        "lost_stats_misc",
+        "lost",
+    ],
+    "yellow_cards": ["yellow_cards", "crdy", "cards_yellow", "crdy_stats_misc"],
+    "red_cards": ["red_cards", "crdr", "cards_red", "crdr_stats_misc"],
+    "clean_sheets": ["clean_sheets", "cs", "cs_stats_keeper"],
+    "saves": ["saves"],
+    "save_percentage": ["save_percentage", "save_pct", "savepct"],
+    "goals_against": ["goals_against", "ga", "ga_stats_keeper"],
+    "pass_completion": [
+        "pass_completion",
+        "cmp_pct_stats_keeper_adv",
+        "cmppct_stats_keeper_adv",
+    ],
 }
 
 STAT_FIELDS = [
+    "matches",
+    "starts",
     "minutes",
     "goals",
     "assists",
@@ -78,9 +136,41 @@ STAT_FIELDS = [
     "blocks",
     "aerials_won",
     "aerials_lost",
+    "yellow_cards",
+    "red_cards",
+    "clean_sheets",
+    "saves",
+    "save_percentage",
+    "goals_against",
+    "pass_completion",
 ]
 
-INTEGER_FIELDS = {"minutes", "goals", "assists"}
+INTEGER_FIELDS = {
+    "matches",
+    "starts",
+    "minutes",
+    "goals",
+    "assists",
+    "yellow_cards",
+    "red_cards",
+    "clean_sheets",
+    "saves",
+    "goals_against",
+}
+NON_ADDITIVE_FIELDS = {"save_percentage", "pass_completion"}
+
+
+def print_sample_schema():
+    print("Expected fbref_player_stats.csv schema:")
+    print(",".join(SAMPLE_COLUMNS))
+    print("Alternative FBref columns are also supported:")
+    print("Player -> player, Squad -> squad, Comp -> league, Min -> minutes")
+    print("Gls -> goals, Ast -> assists, xAG -> xa, Sh -> shots, SoT -> shots_on_target")
+    print("KP -> key_passes, PrgP -> progressive_passes, PrgC -> progressive_carries")
+    print("SCA -> shot_creating_actions, GCA -> goal_creating_actions")
+    print("Tkl -> tackles, Int -> interceptions, Blocks -> blocks")
+    print("MP -> matches, Starts -> starts, CrdY -> yellow_cards, CrdR -> red_cards")
+    print("CS -> clean_sheets, Saves -> saves, Save% -> save_percentage, GA -> goals_against")
 
 
 def normalize_text(value):
@@ -156,6 +246,15 @@ def get_column_value(row, column_lookup, field_name):
     return None
 
 
+def get_raw_value(row, column_lookup, field_name):
+    value = get_column_value(row, column_lookup, field_name)
+
+    if value is None or pd.isna(value):
+        return ""
+
+    return value
+
+
 def build_player_maps(db):
     players = db.query(PlayerDB).all()
 
@@ -172,11 +271,27 @@ def build_player_maps(db):
         for player in players
         if player.name and player.club
     }
+    players_by_name = {}
 
-    return players_by_transfermarkt_id, players_by_name_club
+    for player in players:
+        normalized_name = normalize_text(player.name)
+
+        if not normalized_name:
+            continue
+
+        players_by_name.setdefault(normalized_name, []).append(player)
+
+    return players_by_transfermarkt_id, players_by_name_club, players_by_name
 
 
-def resolve_player(row, column_lookup, players_by_transfermarkt_id, players_by_name_club):
+def resolve_player(
+    row,
+    column_lookup,
+    season,
+    players_by_transfermarkt_id,
+    players_by_name_club,
+    players_by_name,
+):
     transfermarkt_id = parse_int(get_column_value(row, column_lookup, "transfermarkt_id"))
 
     if transfermarkt_id is not None:
@@ -187,26 +302,65 @@ def resolve_player(row, column_lookup, players_by_transfermarkt_id, players_by_n
 
     player_name = get_column_value(row, column_lookup, "player_name")
     club_name = get_column_value(row, column_lookup, "club")
+    normalized_player_name = normalize_text(player_name)
+    normalized_club_name = normalize_text(club_name)
 
     player = players_by_name_club.get(
         (
-            normalize_text(player_name),
-            normalize_text(club_name),
+            normalized_player_name,
+            normalized_club_name,
         )
     )
 
     if player:
         return player, player.transfermarkt_id, "name_club"
 
+    if season and normalized_player_name and normalized_club_name:
+        for candidate in players_by_name.get(normalized_player_name, []):
+            normalized_candidate_club = normalize_text(candidate.club)
+
+            if (
+                normalized_club_name in normalized_candidate_club
+                or normalized_candidate_club in normalized_club_name
+            ):
+                return candidate, candidate.transfermarkt_id, "name_squad_season"
+
+    if season and normalized_player_name:
+        candidates = players_by_name.get(normalized_player_name, [])
+
+        if len(candidates) == 1:
+            player = candidates[0]
+            return player, player.transfermarkt_id, "name_season"
+
     return None, transfermarkt_id, "unmatched"
+
+
+def assign_values(stats, values):
+    for field_name, value in values.items():
+        setattr(stats, field_name, value)
+
+
+def merge_values(stats, values):
+    for field_name, value in values.items():
+        if value is None:
+            continue
+
+        current_value = getattr(stats, field_name)
+
+        if field_name in NON_ADDITIVE_FIELDS:
+            if current_value is None:
+                setattr(stats, field_name, value)
+            continue
+
+        setattr(stats, field_name, (current_value or 0) + value)
 
 
 def import_fbref_advanced_stats():
     if not os.path.exists(CSV_PATH):
-        raise FileNotFoundError(
-            f"FBref advanced stats CSV not found: {CSV_PATH}. "
-            "Place the file at app/data/fbref_player_stats.csv."
-        )
+        print(f"FBref advanced stats CSV not found: {CSV_PATH}")
+        print("Place the file at app/data/fbref_player_stats.csv.")
+        print_sample_schema()
+        return
 
     db = SessionLocal()
 
@@ -217,10 +371,9 @@ def import_fbref_advanced_stats():
         print("Inspecting CSV columns:")
         print(list(df.columns))
 
-        column_lookup = {
-            normalize_column_name(column_name): column_name
-            for column_name in df.columns
-        }
+        column_lookup = {}
+        for column_name in df.columns:
+            column_lookup.setdefault(normalize_column_name(column_name), column_name)
         mapped_columns = {}
         for field_name, aliases in FIELD_ALIASES.items():
             for alias in aliases:
@@ -233,36 +386,80 @@ def import_fbref_advanced_stats():
         print("Mapped fields:")
         print(sorted(mapped_columns.keys()))
 
-        players_by_transfermarkt_id, players_by_name_club = build_player_maps(db)
+        if "season" not in mapped_columns:
+            print(f"Season column not found. Using default season: {DEFAULT_SEASON}")
+
+        (
+            players_by_transfermarkt_id,
+            players_by_name_club,
+            players_by_name,
+        ) = build_player_maps(db)
 
         updated = 0
         imported = 0
         skipped = 0
         matched_by_transfermarkt_id = 0
         matched_by_name_club = 0
+        matched_by_name_squad_season = 0
+        matched_by_name_season = 0
+        unmatched_rows = []
+        stats_by_key = {}
 
         for _, row in df.iterrows():
             season = normalize_season(get_column_value(row, column_lookup, "season"))
 
+            if not season and "season" not in mapped_columns:
+                season = DEFAULT_SEASON
+
             if not season:
                 skipped += 1
+                unmatched_rows.append(
+                    {
+                        "player": get_raw_value(row, column_lookup, "player_name"),
+                        "squad": get_raw_value(row, column_lookup, "club"),
+                        "league": get_raw_value(row, column_lookup, "league"),
+                        "season": "",
+                        "transfermarkt_id": get_raw_value(
+                            row,
+                            column_lookup,
+                            "transfermarkt_id",
+                        ),
+                        "reason": "missing season",
+                    }
+                )
                 continue
 
             player, transfermarkt_id, match_type = resolve_player(
                 row,
                 column_lookup,
+                season,
                 players_by_transfermarkt_id,
                 players_by_name_club,
+                players_by_name,
             )
 
             if not player:
                 skipped += 1
+                unmatched_rows.append(
+                    {
+                        "player": get_raw_value(row, column_lookup, "player_name"),
+                        "squad": get_raw_value(row, column_lookup, "club"),
+                        "league": get_raw_value(row, column_lookup, "league"),
+                        "season": season,
+                        "transfermarkt_id": transfermarkt_id or "",
+                        "reason": "no matching player",
+                    }
+                )
                 continue
 
             if match_type == "transfermarkt_id":
                 matched_by_transfermarkt_id += 1
             elif match_type == "name_club":
                 matched_by_name_club += 1
+            elif match_type == "name_squad_season":
+                matched_by_name_squad_season += 1
+            elif match_type == "name_season":
+                matched_by_name_season += 1
 
             values = {}
 
@@ -275,7 +472,8 @@ def import_fbref_advanced_stats():
                 )
 
             existing_stats = (
-                db.query(PlayerAdvancedStatsDB)
+                stats_by_key.get((player.id, season, SOURCE))
+                or db.query(PlayerAdvancedStatsDB)
                 .filter(PlayerAdvancedStatsDB.player_id == player.id)
                 .filter(PlayerAdvancedStatsDB.season == season)
                 .filter(PlayerAdvancedStatsDB.source == SOURCE)
@@ -285,8 +483,11 @@ def import_fbref_advanced_stats():
             if existing_stats:
                 existing_stats.transfermarkt_id = transfermarkt_id
 
-                for field_name, value in values.items():
-                    setattr(existing_stats, field_name, value)
+                if (player.id, season, SOURCE) in stats_by_key:
+                    merge_values(existing_stats, values)
+                else:
+                    assign_values(existing_stats, values)
+                    stats_by_key[(player.id, season, SOURCE)] = existing_stats
 
                 updated += 1
                 continue
@@ -300,16 +501,26 @@ def import_fbref_advanced_stats():
             )
 
             db.add(advanced_stats)
+            stats_by_key[(player.id, season, SOURCE)] = advanced_stats
             imported += 1
 
         db.commit()
 
+        if unmatched_rows:
+            pd.DataFrame(unmatched_rows).to_csv(UNMATCHED_CSV_PATH, index=False)
+        elif os.path.exists(UNMATCHED_CSV_PATH):
+            os.remove(UNMATCHED_CSV_PATH)
+
         print("FBref advanced stats import completed.")
+        print(f"Total rows: {len(df)}")
         print(f"Imported: {imported}")
         print(f"Updated: {updated}")
         print(f"Skipped: {skipped}")
+        print(f"Unmatched players CSV path: {UNMATCHED_CSV_PATH}")
         print(f"Matched by transfermarkt_id: {matched_by_transfermarkt_id}")
         print(f"Matched by name + club: {matched_by_name_club}")
+        print(f"Matched by player + squad + season: {matched_by_name_squad_season}")
+        print(f"Matched by player + season: {matched_by_name_season}")
 
     except Exception as error:
         db.rollback()

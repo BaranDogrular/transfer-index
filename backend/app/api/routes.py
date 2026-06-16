@@ -183,6 +183,8 @@ def serialize_advanced_stats(player_id, stats=None, season="2024/25"):
         "player_id": player_id,
         "season": stats.season if stats else season,
         "source": stats.source if stats else "fbref",
+        "matches": stats.matches if stats else None,
+        "starts": stats.starts if stats else None,
         "minutes": stats.minutes if stats else None,
         "goals": stats.goals if stats else None,
         "assists": stats.assists if stats else None,
@@ -203,6 +205,13 @@ def serialize_advanced_stats(player_id, stats=None, season="2024/25"):
         "blocks": stats.blocks if stats else None,
         "aerials_won": stats.aerials_won if stats else None,
         "aerials_lost": stats.aerials_lost if stats else None,
+        "yellow_cards": stats.yellow_cards if stats else None,
+        "red_cards": stats.red_cards if stats else None,
+        "clean_sheets": stats.clean_sheets if stats else None,
+        "saves": stats.saves if stats else None,
+        "save_percentage": stats.save_percentage if stats else None,
+        "goals_against": stats.goals_against if stats else None,
+        "pass_completion": stats.pass_completion if stats else None,
     }
 
 
