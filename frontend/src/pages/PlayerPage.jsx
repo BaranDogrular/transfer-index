@@ -22,8 +22,13 @@ function PlayerPage() {
   const [valuationsLoading, setValuationsLoading] = useState(true);
   const [transfers, setTransfers] = useState([]);
   const [transfersLoading, setTransfersLoading] = useState(true);
+  const [similarPlayers, setSimilarPlayers] = useState([]);
+  const [similarPlayersLoading, setSimilarPlayersLoading] = useState(true);
+  const [clubInfo, setClubInfo] = useState(null);
 
   useEffect(() => {
+    setClubInfo(null);
+
     fetch(`http://127.0.0.1:8000/players/${id}`)
       .then((res) => res.json())
       .then((data) => setPlayer(data))
@@ -81,6 +86,80 @@ function PlayerPage() {
 
     fetchTransfers();
   }, [id]);
+
+  useEffect(() => {
+    const fetchSimilarPlayers = async () => {
+      try {
+        setSimilarPlayersLoading(true);
+
+        const response = await fetch(
+          `http://127.0.0.1:8000/players/${id}/similar`,
+        );
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch similar players");
+        }
+
+        const data = await response.json();
+        setSimilarPlayers(data || []);
+      } catch (error) {
+        console.error(error);
+        setSimilarPlayers([]);
+      } finally {
+        setSimilarPlayersLoading(false);
+      }
+    };
+
+    fetchSimilarPlayers();
+  }, [id]);
+
+  useEffect(() => {
+    if (!player) {
+      return;
+    }
+
+    const clubLookupValue =
+      player.club_id || player.current_club_id || player.club;
+
+    if (!clubLookupValue) {
+      setClubInfo(null);
+      return;
+    }
+
+    let isCurrent = true;
+
+    const fetchClubInfo = async () => {
+      try {
+        const response = await fetch(
+          `http://127.0.0.1:8000/clubs/${encodeURIComponent(
+            String(clubLookupValue),
+          )}`,
+        );
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch club");
+        }
+
+        const data = await response.json();
+
+        if (isCurrent) {
+          setClubInfo(data);
+        }
+      } catch (error) {
+        console.error(error);
+
+        if (isCurrent) {
+          setClubInfo(null);
+        }
+      }
+    };
+
+    fetchClubInfo();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [player]);
 
   const formatValue = (value, suffix = "") => {
     if (!value || value === 0 || value === "0") {
@@ -222,16 +301,31 @@ function PlayerPage() {
     return formatTransferMoney(fee);
   };
 
-  const renderClubCell = (clubName, country) => (
-    <div className="flex min-w-0 flex-col">
-      <span className="truncate font-semibold text-zinc-100">
-        {formatText(clubName)}
-      </span>
-      {country && (
-        <span className="mt-1 truncate text-xs uppercase tracking-wide text-zinc-500">
-          {country}
+  const getValidImageUrl = (imageUrl) =>
+    imageUrl && imageUrl !== "https://..." ? imageUrl : null;
+
+  const renderClubLogo = (logoUrl, className = "h-5 w-5") =>
+    logoUrl ? (
+      <img
+        src={logoUrl}
+        alt=""
+        className={`${className} rounded-full bg-white object-contain p-0.5`}
+      />
+    ) : null;
+
+  const renderClubCell = (clubName, country, logoUrl) => (
+    <div className="flex min-w-0 items-center gap-3">
+      {renderClubLogo(logoUrl, "h-8 w-8 shrink-0")}
+      <div className="flex min-w-0 flex-col">
+        <span className="truncate font-semibold text-zinc-100">
+          {formatText(clubName)}
         </span>
-      )}
+        {country && (
+          <span className="mt-1 truncate text-xs uppercase tracking-wide text-zinc-500">
+            {country}
+          </span>
+        )}
+      </div>
     </div>
   );
 
@@ -333,6 +427,69 @@ function PlayerPage() {
 
   const recommendation = getRecommendation();
   const scoutTags = getScoutTags();
+  const playerImageUrl = getValidImageUrl(player.image_url);
+  const clubRouteValue = player.club_id || player.current_club_id || player.club;
+  const clubPath = clubRouteValue
+    ? `/club/${encodeURIComponent(String(clubRouteValue))}`
+    : null;
+  const clubName = clubInfo?.club_name || player.club;
+  const clubLeague = clubInfo?.league || player.league;
+  const clubCountry = clubInfo?.country;
+  const clubLogoUrl = clubInfo?.logo_url || player.club_logo_url;
+  const profileFields = [
+    { label: "Nationality", value: formatText(player.nationality) },
+    { label: "Position", value: formatText(player.position) },
+    { label: "Age", value: formatValue(player.age) },
+    { label: "Height", value: formatValue(player.height_cm, " cm") },
+    {
+      label: "Preferred Foot",
+      value:
+        player.preferred_foot && player.preferred_foot !== "Unknown"
+          ? player.preferred_foot
+          : "-",
+    },
+    {
+      label: "Contract Until",
+      value: formatContractDate(player.contract_expiration_date),
+    },
+  ];
+  const playerInfoFields = [
+    {
+      label: "Date of Birth",
+      value: formatContractDate(player.date_of_birth || player.birth_date),
+    },
+    { label: "Age", value: formatValue(player.age) },
+    { label: "Nationality", value: formatText(player.nationality) },
+    { label: "Position", value: formatText(player.position) },
+    { label: "Height", value: formatValue(player.height_cm, " cm") },
+    {
+      label: "Preferred Foot",
+      value:
+        player.preferred_foot && player.preferred_foot !== "Unknown"
+          ? player.preferred_foot
+          : "-",
+    },
+    {
+      label: "Contract Until",
+      value: formatContractDate(player.contract_expiration_date),
+    },
+    {
+      label: "Current Club",
+      value:
+        clubName && clubPath ? (
+          <Link
+            to={clubPath}
+            className="inline-flex items-center gap-2 text-cyan-300 transition-colors hover:text-cyan-200"
+          >
+            {renderClubLogo(clubLogoUrl)}
+            <span>{clubName}</span>
+          </Link>
+        ) : (
+          formatText(clubName)
+        ),
+    },
+    { label: "League", value: formatText(clubLeague) },
+  ];
 
   return (
     <div className="min-h-screen bg-black text-white overflow-hidden">
@@ -353,107 +510,170 @@ function PlayerPage() {
         </div>
 
         <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-[32px] p-10">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-10">
-            <div className="flex flex-col md:flex-row md:items-center gap-8">
-              <div className="w-44 h-44 rounded-3xl overflow-hidden border border-white/10 bg-zinc-900 shadow-2xl shrink-0">
-                <img
-                  src={
-                    player.image_url && player.image_url !== "https://..."
-                      ? player.image_url
-                      : "https://placehold.co/400x400/111111/ffffff?text=Player"
-                  }
-                  alt={player.name}
-                  className="w-full h-full object-cover"
-                />
-              </div>
-
-              <div>
-                <div className="inline-flex items-center px-4 py-2 rounded-full bg-yellow-500/20 text-yellow-300 text-sm font-semibold mb-6">
-                  {player.position || "Unknown Position"}
+          <div className="grid grid-cols-1 gap-8 xl:grid-cols-[minmax(0,1fr)_380px]">
+            <div className="flex flex-col gap-8 lg:flex-row">
+              {playerImageUrl && (
+                <div className="h-52 w-44 shrink-0 overflow-hidden rounded-3xl border border-white/10 bg-zinc-900 shadow-2xl">
+                  <img
+                    src={playerImageUrl}
+                    alt={player.name}
+                    className="h-full w-full object-cover"
+                  />
                 </div>
+              )}
 
-                <h1 className="text-5xl md:text-6xl font-black tracking-tight">
+              <div className="min-w-0 flex-1">
+                <h1 className="text-5xl font-black tracking-tight md:text-6xl">
                   {player.name}
                 </h1>
 
-                <p className="mt-4 text-zinc-400 text-lg">
-                  {player.club ? (
+                <div className="mt-4 flex flex-wrap items-center gap-2 text-lg text-zinc-400">
+                  {clubName && clubPath ? (
                     <Link
-                      to={`/club/${encodeURIComponent(player.club)}`}
-                      className="hover:text-cyan-300 transition-colors"
+                      to={clubPath}
+                      className="inline-flex items-center gap-2 transition-colors hover:text-cyan-300"
                     >
-                      {player.club}
+                      {renderClubLogo(clubLogoUrl)}
+                      <span>{clubName}</span>
                     </Link>
                   ) : (
-                    "Unknown Club"
-                  )}{" "}
-                  •{" "}
-                  {player.league || "Unknown League"}
-                </p>
-
-                <div className="flex flex-wrap gap-3 mt-6">
-                  <div className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm">
-                    {player.nationality || "Unknown Nationality"}
-                  </div>
-
-                  <div className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm">
-                    {player.height_cm ? `${player.height_cm} cm` : "-"}
-                  </div>
-
-                  <div className="px-4 py-2 rounded-2xl bg-white/5 border border-white/10 text-sm">
-                    {player.preferred_foot &&
-                    player.preferred_foot !== "Unknown"
-                      ? `${player.preferred_foot} foot`
-                      : "-"}
-                  </div>
+                    <span>{clubName || "Unknown Club"}</span>
+                  )}
+                  <span className="text-zinc-600">&bull;</span>
+                  <span>{clubLeague || "Unknown League"}</span>
                 </div>
 
-                <div className="flex flex-wrap gap-3 mt-6">
+                <div className="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {profileFields.map((field) => (
+                    <div
+                      key={field.label}
+                      className="rounded-2xl border border-white/10 bg-black/30 px-4 py-3"
+                    >
+                      <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">
+                        {field.label}
+                      </p>
+                      <p className="mt-1 font-semibold text-zinc-100">
+                        {field.value}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-6 flex flex-wrap gap-3">
                   {scoutTags.map((tag) => (
                     <span
                       key={tag}
-                      className="px-3 py-1 rounded-full bg-cyan-500/10 text-cyan-300 text-xs font-bold border border-cyan-500/20"
+                      className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1 text-xs font-bold text-cyan-300"
                     >
                       {tag}
                     </span>
                   ))}
                 </div>
+
+                <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+                  <button
+                    onClick={analyzeTransfer}
+                    disabled={loadingAi}
+                    className="rounded-2xl bg-cyan-400 px-6 py-4 font-black text-black transition-all hover:bg-cyan-300 disabled:opacity-50"
+                  >
+                    {loadingAi ? "Analyzing..." : "Analyze Transfer"}
+                  </button>
+
+                  <Link
+                    to={`/compare?player1_id=${player.id}`}
+                    className="rounded-2xl bg-white/10 px-6 py-4 text-center font-black text-white transition-all hover:bg-white/15"
+                  >
+                    Compare Player
+                  </Link>
+
+                  {recommendation && (
+                    <div
+                      className={`flex items-center rounded-2xl px-5 py-4 text-sm font-black ${recommendation.className}`}
+                    >
+                      {recommendation.label}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div className="flex flex-col items-center">
-              <div className="w-64 h-64 rounded-full border-[12px] border-cyan-400 flex flex-col items-center justify-center bg-cyan-500/10 shadow-2xl shadow-cyan-500/20">
-                <div className="text-7xl font-black text-cyan-300">
-                  {score ? score.transfer_index : "--"}
-                </div>
+            <div className="rounded-3xl border border-white/10 bg-zinc-950/80 p-6">
+              <div className="flex items-start gap-4">
+                {clubLogoUrl && (
+                  <img
+                    src={clubLogoUrl}
+                    alt=""
+                    className="h-16 w-16 shrink-0 rounded-2xl bg-white object-contain p-2"
+                  />
+                )}
 
-                <div className="mt-2 text-zinc-400 text-sm uppercase tracking-widest">
-                  Transfer Index
+                <div className="min-w-0">
+                  <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">
+                    Current Club
+                  </p>
+
+                  {clubName && clubPath ? (
+                    <Link
+                      to={clubPath}
+                      className="mt-2 block truncate text-2xl font-black text-white transition-colors hover:text-cyan-300"
+                    >
+                      {clubName}
+                    </Link>
+                  ) : (
+                    <h2 className="mt-2 text-2xl font-black text-white">
+                      {clubName || "-"}
+                    </h2>
+                  )}
+
+                  <p className="mt-1 truncate text-sm text-zinc-400">
+                    {clubLeague || "-"}
+                  </p>
                 </div>
               </div>
 
-              {recommendation && (
-                <div
-                  className={`mt-5 px-4 py-2 rounded-full text-sm font-black ${recommendation.className}`}
-                >
-                  {recommendation.label}
+              <div className="mt-8 space-y-4">
+                <div className="flex items-center justify-between gap-4 border-b border-white/5 pb-4">
+                  <span className="text-zinc-500">League</span>
+                  <span className="text-right font-semibold text-zinc-100">
+                    {clubLeague || "-"}
+                  </span>
                 </div>
-              )}
 
-              <button
-                onClick={analyzeTransfer}
-                disabled={loadingAi}
-                className="mt-6 w-64 py-4 rounded-2xl bg-cyan-400 hover:bg-cyan-300 disabled:opacity-50 text-black font-black transition-all"
-              >
-                {loadingAi ? "Analyzing..." : "Analyze Transfer"}
-              </button>
+                <div className="flex items-center justify-between gap-4 border-b border-white/5 pb-4">
+                  <span className="text-zinc-500">Country</span>
+                  <span className="text-right font-semibold text-zinc-100">
+                    {clubCountry || "-"}
+                  </span>
+                </div>
 
-              <Link
-                to={`/compare?player1_id=${player.id}`}
-                className="mt-3 w-64 py-4 rounded-2xl bg-white/10 hover:bg-white/15 text-center font-black text-white transition-all"
-              >
-                Compare Player
-              </Link>
+                <div className="flex items-center justify-between gap-4 border-b border-white/5 pb-4">
+                  <span className="text-zinc-500">Contract Until</span>
+                  <span className="text-right font-semibold text-zinc-100">
+                    {formatContractDate(player.contract_expiration_date)}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-zinc-500">Current Market Value</span>
+                  <span className="text-right text-2xl font-black text-cyan-300">
+                    {formatMoney(player.market_value_m)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-8 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-5">
+                <p className="text-xs font-bold uppercase tracking-wide text-cyan-300">
+                  Transfer Index
+                </p>
+                <div className="mt-2 flex items-end justify-between gap-4">
+                  <span className="text-5xl font-black text-cyan-300">
+                    {score ? score.transfer_index : "--"}
+                  </span>
+                  <span className="pb-2 text-sm font-semibold text-zinc-400">
+                    AI Scout
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -484,6 +704,26 @@ function PlayerPage() {
               <h3 className="text-3xl font-black">
                 {formatValue(player.height_cm, " cm")}
               </h3>
+            </div>
+          </div>
+
+          <div className="mt-6 rounded-3xl border border-white/5 bg-black/40 p-6">
+            <div className="mb-6">
+              <h2 className="text-2xl font-black">Player Info</h2>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {playerInfoFields.map((field) => (
+                <div
+                  key={field.label}
+                  className="flex items-center justify-between gap-4 rounded-2xl border border-white/5 bg-zinc-950/70 px-4 py-3"
+                >
+                  <span className="text-sm text-zinc-500">{field.label}</span>
+                  <span className="text-right text-sm font-semibold text-zinc-100">
+                    {field.value}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -608,11 +848,13 @@ function PlayerPage() {
                         {renderClubCell(
                           transfer.from_club_name,
                           transfer.from_club_country,
+                          transfer.from_club_logo_url,
                         )}
 
                         {renderClubCell(
                           transfer.to_club_name,
                           transfer.to_club_country,
+                          transfer.to_club_logo_url,
                         )}
 
                         <div className="font-semibold text-zinc-100">
@@ -733,10 +975,11 @@ function PlayerPage() {
                   <span>
                     {player.club ? (
                       <Link
-                        to={`/club/${encodeURIComponent(player.club)}`}
-                        className="text-cyan-300 hover:text-cyan-200 transition-colors"
+                        to={clubPath || `/club/${encodeURIComponent(player.club)}`}
+                        className="inline-flex items-center gap-2 text-cyan-300 hover:text-cyan-200 transition-colors"
                       >
-                        {player.club}
+                        {renderClubLogo(clubLogoUrl)}
+                        {clubName || player.club}
                       </Link>
                     ) : (
                       "-"
@@ -750,6 +993,74 @@ function PlayerPage() {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className="mt-10 bg-black/40 rounded-3xl p-8 border border-white/5">
+            <div className="mb-8">
+              <h2 className="text-3xl font-black">Similar Players</h2>
+              <p className="text-zinc-400 mt-2">
+                Position, profile, market value and performance similarity
+              </p>
+            </div>
+
+            {similarPlayersLoading ? (
+              <div className="h-40 flex items-center justify-center text-zinc-400 animate-pulse">
+                Loading similar players...
+              </div>
+            ) : similarPlayers.length === 0 ? (
+              <div className="h-40 flex items-center justify-center text-zinc-500">
+                No similar players found
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                {similarPlayers.map((similarPlayer) => (
+                  <Link
+                    key={similarPlayer.id}
+                    to={`/player/${similarPlayer.id}`}
+                    className="group rounded-2xl border border-white/5 bg-zinc-950/70 p-4 transition-colors hover:border-cyan-400/30 hover:bg-white/[0.04]"
+                  >
+                    <div className="flex items-start gap-4">
+                      <img
+                        src={
+                          similarPlayer.image_url &&
+                          similarPlayer.image_url !== "https://..."
+                            ? similarPlayer.image_url
+                            : "https://placehold.co/100x100/111111/ffffff?text=Player"
+                        }
+                        alt={similarPlayer.name}
+                        className="h-16 w-16 rounded-2xl bg-zinc-900 object-cover"
+                      />
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h3 className="truncate font-black text-white group-hover:text-cyan-300">
+                              {similarPlayer.name}
+                            </h3>
+                            <p className="mt-1 truncate text-sm text-zinc-500">
+                              {similarPlayer.club || "-"}
+                            </p>
+                          </div>
+
+                          <span className="shrink-0 rounded-full bg-cyan-400/10 px-2 py-1 text-xs font-black text-cyan-300">
+                            {similarPlayer.similarity}% Match
+                          </span>
+                        </div>
+
+                        <div className="mt-4 flex items-center justify-between gap-3 text-sm">
+                          <span className="truncate text-zinc-400">
+                            {similarPlayer.position || "-"}
+                          </span>
+                          <span className="font-bold text-zinc-100">
+                            {formatMoney(similarPlayer.market_value_m)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
           </div>
 
           {(score || loadingAi) && (

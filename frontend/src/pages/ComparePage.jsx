@@ -164,8 +164,19 @@ function PlayerSearchBox({
 
                 <div className="min-w-0">
                   <div className="truncate font-bold text-white">{player.name}</div>
-                  <div className="truncate text-sm text-zinc-500">
-                    {player.club || "-"} · {player.position || "-"}
+                  <div className="mt-1 flex min-w-0 items-center gap-2 text-sm text-zinc-500">
+                    {player.club_logo_url ? (
+                      <img
+                        src={player.club_logo_url}
+                        alt=""
+                        className="h-4 w-4 shrink-0 rounded-full bg-white object-contain p-0.5"
+                      />
+                    ) : (
+                      <span className="h-4 w-4 shrink-0 rounded-full border border-white/10 bg-white/5" />
+                    )}
+                    <span className="truncate">
+                      {player.club || "-"} · {player.position || "-"}
+                    </span>
                   </div>
                 </div>
               </button>
@@ -235,7 +246,7 @@ export default function ComparePage() {
       });
       const response = await fetch(`${API_BASE_URL}/players/search?${params}`);
       const data = await response.json();
-      setResults(data.players || []);
+      setResults(Array.isArray(data) ? data : data.players || []);
     } catch (searchError) {
       console.error(searchError);
       setResults([]);

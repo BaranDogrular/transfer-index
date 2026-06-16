@@ -21,8 +21,10 @@ class PlayerDB(Base):
     age = Column(Integer)
     position = Column(String)
     club = Column(String)
+    current_club_id = Column(Integer, nullable=True, index=True)
 
     # PROFILE
+    date_of_birth = Column(Date, nullable=True)
     nationality = Column(String)
     preferred_foot = Column(String)
 

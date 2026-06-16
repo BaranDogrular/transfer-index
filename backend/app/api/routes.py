@@ -1,4 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+import re
+import unicodedata
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
@@ -20,6 +24,150 @@ router = APIRouter()
 
 engine = TransferIndexEngine()
 ai_scout = AIScoutService()
+
+ACCENT_TRANSLATION = {
+    "á": "a",
+    "à": "a",
+    "â": "a",
+    "ä": "a",
+    "ã": "a",
+    "å": "a",
+    "ā": "a",
+    "ç": "c",
+    "ć": "c",
+    "č": "c",
+    "é": "e",
+    "è": "e",
+    "ê": "e",
+    "ë": "e",
+    "ē": "e",
+    "ė": "e",
+    "ę": "e",
+    "ğ": "g",
+    "í": "i",
+    "ì": "i",
+    "î": "i",
+    "ï": "i",
+    "ı": "i",
+    "ñ": "n",
+    "ó": "o",
+    "ò": "o",
+    "ô": "o",
+    "ö": "o",
+    "õ": "o",
+    "ø": "o",
+    "ō": "o",
+    "ś": "s",
+    "ş": "s",
+    "š": "s",
+    "ú": "u",
+    "ù": "u",
+    "û": "u",
+    "ü": "u",
+    "ū": "u",
+    "ý": "y",
+    "ÿ": "y",
+    "ž": "z",
+    "ź": "z",
+    "ż": "z",
+}
+ACCENT_FROM = "".join(ACCENT_TRANSLATION.keys())
+ACCENT_TO = "".join(ACCENT_TRANSLATION.values())
+
+
+def normalize_search_query(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value.strip().lower())
+    return "".join(
+        character
+        for character in normalized
+        if not unicodedata.combining(character)
+    )
+
+
+def normalized_column(column):
+    return func.translate(
+        func.lower(func.coalesce(column, "")),
+        ACCENT_FROM,
+        ACCENT_TO,
+    )
+
+
+def get_club_by_id_map(db: Session, club_ids):
+    clean_ids = {
+        club_id
+        for club_id in club_ids
+        if club_id is not None
+    }
+
+    if not clean_ids:
+        return {}
+
+    clubs = db.query(ClubDB).filter(ClubDB.club_id.in_(clean_ids)).all()
+    return {club.club_id: club for club in clubs}
+
+
+def get_player_club(db: Session, player: PlayerDB):
+    if player.current_club_id is None:
+        return None
+
+    return (
+        db.query(ClubDB)
+        .filter(ClubDB.club_id == player.current_club_id)
+        .first()
+    )
+
+
+def serialize_search_player(player, club=None):
+    return {
+        "id": player.id,
+        "name": player.name,
+        "club": player.club,
+        "club_id": player.current_club_id,
+        "club_logo_url": club.logo_url if club else None,
+        "league": player.league,
+        "position": player.position,
+        "market_value_m": player.market_value_m,
+        "image_url": player.image_url,
+    }
+
+
+def serialize_player_detail(player, club=None):
+    return {
+        "id": player.id,
+        "transfermarkt_id": player.transfermarkt_id,
+        "name": player.name,
+        "age": player.age,
+        "position": player.position,
+        "club": player.club,
+        "current_club_id": player.current_club_id,
+        "club_id": player.current_club_id,
+        "club_logo_url": club.logo_url if club else None,
+        "date_of_birth": player.date_of_birth,
+        "nationality": player.nationality,
+        "preferred_foot": player.preferred_foot,
+        "height_cm": player.height_cm,
+        "weight_kg": player.weight_kg,
+        "league": player.league,
+        "image_url": player.image_url,
+        "goals": player.goals,
+        "assists": player.assists,
+        "matches": player.matches,
+        "minutes_played": player.minutes_played,
+        "yellow_cards": player.yellow_cards,
+        "red_cards": player.red_cards,
+        "goals_per_90": player.goals_per_90,
+        "assists_per_90": player.assists_per_90,
+        "goal_contributions": player.goal_contributions,
+        "goal_contributions_per_90": player.goal_contributions_per_90,
+        "minutes_per_goal": player.minutes_per_goal,
+        "xg": player.xg,
+        "xa": player.xa,
+        "market_value_m": player.market_value_m,
+        "salary_m": player.salary_m,
+        "injury_days": player.injury_days,
+        "contract_years_left": player.contract_years_left,
+        "contract_expiration_date": player.contract_expiration_date,
+    }
 
 
 
@@ -60,6 +208,7 @@ def create_player(
 
 @router.get("/players/search")
 def search_players(
+    request: Request,
     q: str | None = None,
     position: str | None = None,
     league: str | None = None,
@@ -73,9 +222,27 @@ def search_players(
     db: Session = Depends(get_db),
 ):
     query = db.query(PlayerDB)
+    normalized_query = normalize_search_query(q) if q else ""
 
-    if q:
-        query = query.filter(PlayerDB.name.ilike(f"%{q}%"))
+    if normalized_query:
+        normalized_name = normalized_column(PlayerDB.name)
+        normalized_club = normalized_column(PlayerDB.club)
+        normalized_league = normalized_column(PlayerDB.league)
+        contains_query = f"%{normalized_query}%"
+        starts_query = f"{normalized_query}%"
+        token_pattern = f"(^|[[:space:]]){re.escape(normalized_query)}"
+        token_starts_query = normalized_name.op("~")(token_pattern)
+
+        query = query.filter(
+            or_(
+                normalized_name == normalized_query,
+                normalized_name.like(starts_query),
+                token_starts_query,
+                normalized_name.like(contains_query),
+                normalized_club.like(contains_query),
+                normalized_league.like(contains_query),
+            )
+        )
 
     if position:
         query = query.filter(PlayerDB.position.ilike(position))
@@ -103,13 +270,65 @@ def search_players(
     page = max(page, 1)
     limit = min(max(limit, 1), 100)
 
-    players = (
-        query
-        .order_by(PlayerDB.market_value_m.desc())
-        .offset((page - 1) * limit)
-        .limit(limit)
-        .all()
+    if normalized_query:
+        rank_score = case(
+            (normalized_name == normalized_query, 1000),
+            (normalized_name.like(starts_query), 700),
+            (token_starts_query, 690),
+            (normalized_name.like(contains_query), 400),
+            (normalized_club.like(contains_query), 200),
+            (normalized_league.like(contains_query), 100),
+            else_=0,
+        )
+        market_score = func.least(
+            func.coalesce(PlayerDB.market_value_m, 0),
+            200,
+        )
+
+        query = query.order_by(
+            (rank_score + market_score).desc(),
+            PlayerDB.market_value_m.desc().nullslast(),
+            PlayerDB.name.asc(),
+        )
+    else:
+        query = query.order_by(
+            PlayerDB.market_value_m.desc().nullslast(),
+            PlayerDB.name.asc(),
+        )
+
+    players = query.offset((page - 1) * limit).limit(limit).all()
+
+    has_filters = any(
+        value is not None
+        for value in [
+            position,
+            league,
+            nationality,
+            min_age,
+            max_age,
+            max_value,
+            max_salary,
+        ]
     )
+
+    query_param_keys = set(request.query_params.keys())
+    is_autocomplete_request = (
+        q
+        and not has_filters
+        and page == 1
+        and (limit <= 10 or query_param_keys == {"q"})
+    )
+
+    club_map = get_club_by_id_map(
+        db,
+        [player.current_club_id for player in players],
+    )
+
+    if is_autocomplete_request:
+        return [
+            serialize_search_player(player, club_map.get(player.current_club_id))
+            for player in players[:10]
+        ]
 
     return {
         "count": len(players),
@@ -126,7 +345,16 @@ def get_players(db: Session = Depends(get_db)):
 
     return {
         "count": len(players),
-        "players": players,
+        "players": [
+            {
+                **serialize_player_detail(
+                    player,
+                    club_map.get(player.current_club_id),
+                ),
+                "nationality": player.nationality,
+            }
+            for player in players
+        ],
     }
 
 
@@ -169,6 +397,8 @@ def get_club(club_id_or_name: str, db: Session = Depends(get_db)):
             "age": player.age,
             "market_value_m": player.market_value_m,
             "image_url": player.image_url,
+            "club_id": player.current_club_id,
+            "club_logo_url": None,
         }
         for player in players
     ]
@@ -187,6 +417,7 @@ def get_club(club_id_or_name: str, db: Session = Depends(get_db)):
         "club_name": club_name,
         "country": club.country if club else None,
         "league": club.league if club else None,
+        "logo_url": club.logo_url if club else None,
         "squad_count": len(players) if players else club.squad_size if club else 0,
         "average_age": average_age if average_age is not None else club.average_age if club else None,
         "total_market_value": total_market_value,
@@ -255,7 +486,83 @@ def get_player(
             detail="Player not found",
         )
 
-    return player
+    club = get_player_club(db, player)
+
+    return serialize_player_detail(player, club)
+
+
+@router.get("/players/{player_id}/similar")
+def get_similar_players(player_id: int, db: Session = Depends(get_db)):
+    player = db.query(PlayerDB).filter(PlayerDB.id == player_id).first()
+
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    candidates = (
+        db.query(PlayerDB)
+        .filter(PlayerDB.id != player_id)
+        .filter(PlayerDB.position.isnot(None))
+        .all()
+    )
+
+    def numeric_score(base_value, candidate_value, max_difference, weight):
+        if base_value is None or candidate_value is None:
+            return 0
+
+        try:
+            difference = abs(float(base_value) - float(candidate_value))
+        except Exception:
+            return 0
+
+        return max(0, 1 - (difference / max_difference)) * weight
+
+    def performance_score(candidate):
+        score = 0
+        score += numeric_score(player.matches, candidate.matches, 30, 8)
+        score += numeric_score(player.goals, candidate.goals, 20, 8)
+        score += numeric_score(player.assists, candidate.assists, 20, 8)
+        score += numeric_score(player.minutes_played, candidate.minutes_played, 3000, 8)
+        return score
+
+    scored_players = []
+
+    for candidate in candidates:
+        score = 0
+
+        if player.position and candidate.position:
+            if player.position.lower() == candidate.position.lower():
+                score += 35
+            elif player.position.lower() in candidate.position.lower() or candidate.position.lower() in player.position.lower():
+                score += 20
+
+        score += numeric_score(player.age, candidate.age, 12, 14)
+        score += numeric_score(player.height_cm, candidate.height_cm, 25, 8)
+        score += numeric_score(player.market_value_m, candidate.market_value_m, 80, 18)
+        score += performance_score(candidate)
+
+        if (
+            player.preferred_foot
+            and candidate.preferred_foot
+            and player.preferred_foot.lower() == candidate.preferred_foot.lower()
+        ):
+            score += 5
+
+        scored_players.append(
+            {
+                "id": candidate.id,
+                "name": candidate.name,
+                "club": candidate.club,
+                "league": candidate.league,
+                "position": candidate.position,
+                "market_value_m": candidate.market_value_m,
+                "age": candidate.age,
+                "image_url": candidate.image_url,
+                "similarity": min(99, max(1, round(score))),
+            }
+        )
+
+    scored_players.sort(key=lambda item: item["similarity"], reverse=True)
+    return scored_players[:8]
 
 
 @router.post("/players/{player_id}/transfer-score")
@@ -423,6 +730,15 @@ def get_player_transfers(player_id: int, db: Session = Depends(get_db)):
         .all()
     )
 
+    club_map = get_club_by_id_map(
+        db,
+        [
+            club_id
+            for item in transfers
+            for club_id in [item.from_club_id, item.to_club_id]
+        ],
+    )
+
     def format_transfer_fee(value):
         if value is None or value <= 0:
             return None
@@ -467,6 +783,16 @@ def get_player_transfers(player_id: int, db: Session = Depends(get_db)):
             "to_club_id": item.to_club_id,
             "from_club_name": item.from_club_name,
             "to_club_name": item.to_club_name,
+            "from_club_logo_url": (
+                club_map[item.from_club_id].logo_url
+                if item.from_club_id in club_map
+                else None
+            ),
+            "to_club_logo_url": (
+                club_map[item.to_club_id].logo_url
+                if item.to_club_id in club_map
+                else None
+            ),
             "from_club_country": item.from_club_country,
             "to_club_country": item.to_club_country,
             "transfer_type": item.transfer_type,

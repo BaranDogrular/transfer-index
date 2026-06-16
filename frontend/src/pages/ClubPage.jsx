@@ -134,11 +134,27 @@ export default function ClubPage() {
               ← Back to Scouting
             </Link>
 
-            <h1 className="text-5xl font-black">{club.club_name || "-"}</h1>
+            <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+              {club.logo_url ? (
+                <img
+                  src={club.logo_url}
+                  alt={club.club_name || "Club logo"}
+                  className="h-24 w-24 rounded-3xl bg-white object-contain p-3"
+                />
+              ) : (
+                <div className="flex h-24 w-24 items-center justify-center rounded-3xl border border-white/10 bg-white/5 text-3xl font-black text-zinc-500">
+                  {(club.club_name || "-").slice(0, 1)}
+                </div>
+              )}
 
-            <p className="mt-3 text-lg text-zinc-400">
-              {formatValue(club.country)} · {formatValue(club.league)}
-            </p>
+              <div>
+                <h1 className="text-5xl font-black">{club.club_name || "-"}</h1>
+
+                <p className="mt-3 text-lg text-zinc-400">
+                  {formatValue(club.country)} · {formatValue(club.league)}
+                </p>
+              </div>
+            </div>
           </div>
 
           <div className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-4 py-2 text-sm font-bold text-cyan-300">

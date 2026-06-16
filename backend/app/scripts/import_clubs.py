@@ -93,6 +93,12 @@ def import_clubs():
             how="left",
         )
 
+        logo_columns = [
+            column
+            for column in ["logo_url", "image_url", "club_logo"]
+            if column in clubs_df.columns
+        ]
+
         imported = 0
         updated = 0
 
@@ -118,6 +124,9 @@ def import_clubs():
             )
             club.league = parse_string(row.get("league"))
             club.country = parse_string(row.get("country"))
+            club.logo_url = (
+                parse_string(row.get(logo_columns[0])) if logo_columns else None
+            )
             club.squad_size = parse_int(row.get("squad_size"))
             club.average_age = parse_float(row.get("average_age"))
             club.total_market_value = parse_float(row.get("total_market_value"))

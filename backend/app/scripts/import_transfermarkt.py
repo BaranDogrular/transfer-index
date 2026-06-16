@@ -117,6 +117,7 @@ def import_players():
                 skipped += 1
                 continue
 
+            date_of_birth = parse_contract_date(row.get("date_of_birth"))
             age = calculate_age(row.get("date_of_birth"))
 
             contract_expiration_date = parse_contract_date(
@@ -131,6 +132,7 @@ def import_players():
                 row.get("sub_position", row.get("position", "Unknown"))
             )
             club = safe_str(row.get("current_club_name", "Unknown"))
+            current_club_id = safe_int(row.get("current_club_id", 0)) or None
             nationality = safe_str(row.get("country_of_citizenship", "Unknown"))
             preferred_foot = safe_str(row.get("foot", "Unknown"))
             height_cm = safe_int(row.get("height_in_cm", 0))
@@ -151,7 +153,9 @@ def import_players():
                 existing_player.age = age
                 existing_player.position = position
                 existing_player.club = club
+                existing_player.current_club_id = current_club_id
 
+                existing_player.date_of_birth = date_of_birth
                 existing_player.nationality = nationality
                 existing_player.preferred_foot = preferred_foot
                 existing_player.height_cm = height_cm
@@ -183,8 +187,10 @@ def import_players():
                 age=age,
                 position=position,
                 club=club,
+                current_club_id=current_club_id,
 
                 # PROFILE
+                date_of_birth=date_of_birth,
                 nationality=nationality,
                 preferred_foot=preferred_foot,
                 height_cm=height_cm,

@@ -13,6 +13,7 @@ class ClubDB(Base):
     domestic_competition_id = Column(String, nullable=True, index=True)
     league = Column(String, nullable=True)
     country = Column(String, nullable=True)
+    logo_url = Column(String, nullable=True)
     squad_size = Column(Integer, nullable=True)
     average_age = Column(Float, nullable=True)
     total_market_value = Column(Float, nullable=True)

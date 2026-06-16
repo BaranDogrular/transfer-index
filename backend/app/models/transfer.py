@@ -8,6 +8,7 @@ class PlayerData(BaseModel):
     age: int
     position: str
     club: str
+    current_club_id: int | None = None
 
     # NEW FIELDS
     nationality: str

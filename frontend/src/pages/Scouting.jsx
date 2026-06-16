@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 export default function Scouting() {
+  const navigate = useNavigate();
+
   const [players, setPlayers] = useState([]);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [autocompleteResults, setAutocompleteResults] = useState([]);
+  const [autocompleteLoading, setAutocompleteLoading] = useState(false);
+  const [autocompleteOpen, setAutocompleteOpen] = useState(false);
+  const [activeAutocompleteIndex, setActiveAutocompleteIndex] = useState(-1);
 
   const [positionFilter, setPositionFilter] = useState("");
   const [maxAge, setMaxAge] = useState("");
@@ -61,10 +67,27 @@ export default function Scouting() {
   const resetFilters = () => {
     setSearchQuery("");
     setDebouncedQuery("");
+    setAutocompleteResults([]);
+    setAutocompleteOpen(false);
+    setActiveAutocompleteIndex(-1);
     setPositionFilter("");
     setMaxAge("");
     setMaxValue("");
     setPage(1);
+  };
+
+  const formatMoney = (value) => {
+    if (!value || value === 0) {
+      return "-";
+    }
+
+    return `€${Number(value).toFixed(2)}M`;
+  };
+
+  const openPlayer = (player) => {
+    if (!player) return;
+    setAutocompleteOpen(false);
+    navigate(`/player/${player.id}`);
   };
 
   const getPlayerScore = (player) => {
@@ -134,6 +157,39 @@ export default function Scouting() {
   }, [searchQuery]);
 
   useEffect(() => {
+    const timeout = setTimeout(async () => {
+      if (searchQuery.trim().length < 2) {
+        setAutocompleteResults([]);
+        setAutocompleteOpen(false);
+        setActiveAutocompleteIndex(-1);
+        return;
+      }
+
+      try {
+        setAutocompleteLoading(true);
+        const params = new URLSearchParams({
+          q: searchQuery.trim(),
+        });
+        const response = await fetch(
+          `http://127.0.0.1:8000/players/search?${params}`,
+        );
+        const data = await response.json();
+        setAutocompleteResults(Array.isArray(data) ? data : data.players || []);
+        setAutocompleteOpen(true);
+        setActiveAutocompleteIndex(-1);
+      } catch (error) {
+        console.error("AUTOCOMPLETE ERROR:", error);
+        setAutocompleteResults([]);
+        setAutocompleteOpen(true);
+      } finally {
+        setAutocompleteLoading(false);
+      }
+    }, 275);
+
+    return () => clearTimeout(timeout);
+  }, [searchQuery]);
+
+  useEffect(() => {
     setPage(1);
   }, [positionFilter, maxAge, maxValue]);
 
@@ -162,25 +218,129 @@ export default function Scouting() {
         {/* FILTERS */}
         <div className="bg-white/5 border border-white/10 rounded-3xl p-6 mb-8">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <input
-              type="text"
-              placeholder="Search player..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="
-                md:col-span-2
-                bg-black/40
-                border
-                border-white/10
-                rounded-2xl
-                px-4
-                py-3
-                text-white
-                placeholder:text-zinc-500
-                outline-none
-                focus:border-cyan-400
-              "
-            />
+            <div className="relative md:col-span-2">
+              <input
+                type="text"
+                placeholder="Search player..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onFocus={() => {
+                  if (searchQuery.trim().length >= 2) {
+                    setAutocompleteOpen(true);
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (!autocompleteOpen) return;
+
+                  if (event.key === "Escape") {
+                    setAutocompleteOpen(false);
+                    setActiveAutocompleteIndex(-1);
+                  }
+
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setActiveAutocompleteIndex((current) =>
+                      Math.min(current + 1, autocompleteResults.length - 1),
+                    );
+                  }
+
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setActiveAutocompleteIndex((current) =>
+                      Math.max(current - 1, 0),
+                    );
+                  }
+
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    openPlayer(
+                      autocompleteResults[
+                        activeAutocompleteIndex >= 0
+                          ? activeAutocompleteIndex
+                          : 0
+                      ],
+                    );
+                  }
+                }}
+                className="
+                  w-full
+                  bg-black/40
+                  border
+                  border-white/10
+                  rounded-2xl
+                  px-4
+                  py-3
+                  text-white
+                  placeholder:text-zinc-500
+                  outline-none
+                  focus:border-cyan-400
+                "
+              />
+
+              {autocompleteOpen && searchQuery.trim().length >= 2 && (
+                <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-96 overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl">
+                  {autocompleteLoading ? (
+                    <div className="px-4 py-4 text-sm text-zinc-500">
+                      Loading players...
+                    </div>
+                  ) : autocompleteResults.length > 0 ? (
+                    autocompleteResults.map((player, index) => (
+                      <button
+                        key={player.id}
+                        type="button"
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          openPlayer(player);
+                        }}
+                        className={`flex w-full items-center gap-4 border-b border-white/5 px-4 py-3 text-left transition-colors last:border-b-0 ${
+                          activeAutocompleteIndex === index
+                            ? "bg-cyan-400/10"
+                            : "hover:bg-white/5"
+                        }`}
+                      >
+                        <img
+                          src={
+                            player.image_url && player.image_url !== "https://..."
+                              ? player.image_url
+                              : "https://placehold.co/80x80/111111/ffffff?text=Player"
+                          }
+                          alt={player.name}
+                          className="h-11 w-11 rounded-xl bg-zinc-900 object-cover"
+                        />
+
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-bold text-white">
+                            {player.name}
+                          </div>
+                          <div className="mt-1 flex min-w-0 items-center gap-2 text-sm text-zinc-500">
+                            {player.club_logo_url ? (
+                              <img
+                                src={player.club_logo_url}
+                                alt=""
+                                className="h-4 w-4 shrink-0 rounded-full bg-white object-contain p-0.5"
+                              />
+                            ) : (
+                              <span className="h-4 w-4 shrink-0 rounded-full border border-white/10 bg-white/5" />
+                            )}
+                            <span className="truncate">
+                              {player.club || "-"} · {player.position || "-"}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="text-sm font-bold text-cyan-300">
+                          {formatMoney(player.market_value_m)}
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-4 py-4 text-sm text-zinc-500">
+                      No players found
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             <select
               value={positionFilter}
