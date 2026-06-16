@@ -4,6 +4,7 @@ import pandas as pd
 
 from app.database import SessionLocal
 from app.models.player_db import PlayerDB
+from app.models.player_advanced_stats_db import PlayerAdvancedStatsDB
 from app.models.player_valuation_db import PlayerValuationDB
 from app.models.player_transfer_db import PlayerTransferDB
 

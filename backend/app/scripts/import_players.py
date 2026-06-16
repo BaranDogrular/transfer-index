@@ -2,6 +2,7 @@ import csv
 
 from app.database import SessionLocal
 from app.models.player_db import PlayerDB
+from app.models.player_advanced_stats_db import PlayerAdvancedStatsDB
 
 
 db = SessionLocal()

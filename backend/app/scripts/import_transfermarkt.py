@@ -3,11 +3,14 @@ from datetime import date
 
 from app.database import SessionLocal
 from app.models.player_db import PlayerDB
+from app.models.player_advanced_stats_db import PlayerAdvancedStatsDB
+from app.models.player_transfer_db import PlayerTransferDB
 from app.models.player_valuation_db import PlayerValuationDB
 
 print("IMPORT SCRIPT STARTED")
 
 DATA_PATH = "app/data/transfermarkt/players.csv"
+NATIONAL_TEAMS_PATH = "app/data/transfermarkt/national_teams.csv"
 
 
 def safe_int(value, default=0):
@@ -17,6 +20,15 @@ def safe_int(value, default=0):
         return int(value)
     except Exception:
         return default
+
+
+def safe_optional_int(value):
+    try:
+        if pd.isna(value):
+            return None
+        return int(value)
+    except Exception:
+        return None
 
 
 def safe_float(value, default=0.0):
@@ -93,6 +105,19 @@ def import_players():
 
     try:
         df = pd.read_csv(DATA_PATH)
+        national_teams_df = pd.read_csv(NATIONAL_TEAMS_PATH)
+        national_teams_by_id = {}
+        national_teams_by_country = {}
+
+        for _, team_row in national_teams_df.iterrows():
+            national_team_id = safe_optional_int(team_row.get("national_team_id"))
+            country_name = safe_str(team_row.get("country_name", ""), "")
+
+            if national_team_id:
+                national_teams_by_id[national_team_id] = team_row
+
+            if country_name:
+                national_teams_by_country[country_name.lower()] = team_row
 
         imported = 0
         updated = 0
@@ -134,6 +159,31 @@ def import_players():
             club = safe_str(row.get("current_club_name", "Unknown"))
             current_club_id = safe_int(row.get("current_club_id", 0)) or None
             nationality = safe_str(row.get("country_of_citizenship", "Unknown"))
+            national_team_id = safe_optional_int(row.get("current_national_team_id"))
+            national_team = (
+                national_teams_by_id.get(national_team_id)
+                if national_team_id
+                else None
+            )
+            country_team = national_teams_by_country.get(nationality.lower())
+            flag_source = national_team if national_team is not None else country_team
+            country_flag_url = (
+                safe_str(flag_source.get("team_image_url"), "")
+                if flag_source is not None
+                else ""
+            )
+            national_team_name = (
+                safe_str(national_team.get("name"), "")
+                if national_team is not None
+                else ""
+            )
+            national_team_flag_url = (
+                safe_str(national_team.get("team_image_url"), "")
+                if national_team is not None
+                else ""
+            )
+            international_caps = safe_optional_int(row.get("international_caps"))
+            international_goals = safe_optional_int(row.get("international_goals"))
             preferred_foot = safe_str(row.get("foot", "Unknown"))
             height_cm = safe_int(row.get("height_in_cm", 0))
             league = safe_str(
@@ -157,6 +207,12 @@ def import_players():
 
                 existing_player.date_of_birth = date_of_birth
                 existing_player.nationality = nationality
+                existing_player.country_flag_url = country_flag_url
+                existing_player.national_team_id = national_team_id
+                existing_player.national_team_name = national_team_name
+                existing_player.national_team_flag_url = national_team_flag_url
+                existing_player.international_caps = international_caps
+                existing_player.international_goals = international_goals
                 existing_player.preferred_foot = preferred_foot
                 existing_player.height_cm = height_cm
                 existing_player.weight_kg = 0
@@ -192,6 +248,12 @@ def import_players():
                 # PROFILE
                 date_of_birth=date_of_birth,
                 nationality=nationality,
+                country_flag_url=country_flag_url,
+                national_team_id=national_team_id,
+                national_team_name=national_team_name,
+                national_team_flag_url=national_team_flag_url,
+                international_caps=international_caps,
+                international_goals=international_goals,
                 preferred_foot=preferred_foot,
                 height_cm=height_cm,
                 weight_kg=0,

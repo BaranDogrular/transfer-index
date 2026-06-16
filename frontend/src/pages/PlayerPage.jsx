@@ -24,6 +24,8 @@ function PlayerPage() {
   const [transfersLoading, setTransfersLoading] = useState(true);
   const [similarPlayers, setSimilarPlayers] = useState([]);
   const [similarPlayersLoading, setSimilarPlayersLoading] = useState(true);
+  const [advancedStats, setAdvancedStats] = useState(null);
+  const [advancedStatsLoading, setAdvancedStatsLoading] = useState(true);
   const [clubInfo, setClubInfo] = useState(null);
 
   useEffect(() => {
@@ -111,6 +113,32 @@ function PlayerPage() {
     };
 
     fetchSimilarPlayers();
+  }, [id]);
+
+  useEffect(() => {
+    const fetchAdvancedStats = async () => {
+      try {
+        setAdvancedStatsLoading(true);
+
+        const response = await fetch(
+          `http://127.0.0.1:8000/players/${id}/advanced-stats`,
+        );
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch advanced stats");
+        }
+
+        const data = await response.json();
+        setAdvancedStats(data);
+      } catch (error) {
+        console.error(error);
+        setAdvancedStats(null);
+      } finally {
+        setAdvancedStatsLoading(false);
+      }
+    };
+
+    fetchAdvancedStats();
   }, [id]);
 
   useEffect(() => {
@@ -242,6 +270,12 @@ function PlayerPage() {
     }
 
     return value;
+  };
+
+  const formatKnownText = (value) => {
+    const text = formatText(value);
+
+    return text === "Unknown" ? "-" : text;
   };
 
   const formatTransferMoney = (value) => {
@@ -436,6 +470,8 @@ function PlayerPage() {
   const clubLeague = clubInfo?.league || player.league;
   const clubCountry = clubInfo?.country;
   const clubLogoUrl = clubInfo?.logo_url || player.club_logo_url;
+  const nationalTeamFlagUrl =
+    player.national_team_flag_url || player.country_flag_url;
   const profileFields = [
     { label: "Nationality", value: formatText(player.nationality) },
     { label: "Position", value: formatText(player.position) },
@@ -489,6 +525,55 @@ function PlayerPage() {
         ),
     },
     { label: "League", value: formatText(clubLeague) },
+  ];
+  const nationalTeamFields = [
+    { label: "Nationality", value: formatKnownText(player.nationality) },
+    {
+      label: "National Team",
+      value: formatKnownText(player.national_team_name),
+    },
+    {
+      label: "International Caps",
+      value: formatInteger(player.international_caps),
+    },
+    {
+      label: "International Goals",
+      value: formatInteger(player.international_goals),
+    },
+  ];
+  const performanceXg =
+    player.xg !== null && player.xg !== undefined && player.xg !== ""
+      ? player.xg
+      : advancedStats?.xg;
+  const performanceXa =
+    player.xa !== null && player.xa !== undefined && player.xa !== ""
+      ? player.xa
+      : advancedStats?.xa;
+  const advancedStatFields = [
+    { label: "xG", value: formatDecimal(advancedStats?.xg) },
+    { label: "xA", value: formatDecimal(advancedStats?.xa) },
+    { label: "npxG", value: formatDecimal(advancedStats?.npxg) },
+    { label: "Shots", value: formatInteger(advancedStats?.shots) },
+    {
+      label: "Shots on Target",
+      value: formatInteger(advancedStats?.shots_on_target),
+    },
+    { label: "Key Passes", value: formatInteger(advancedStats?.key_passes) },
+    {
+      label: "Progressive Passes",
+      value: formatInteger(advancedStats?.progressive_passes),
+    },
+    {
+      label: "Progressive Carries",
+      value: formatInteger(advancedStats?.progressive_carries),
+    },
+    { label: "SCA", value: formatInteger(advancedStats?.shot_creating_actions) },
+    { label: "GCA", value: formatInteger(advancedStats?.goal_creating_actions) },
+    { label: "Tackles", value: formatInteger(advancedStats?.tackles) },
+    {
+      label: "Interceptions",
+      value: formatInteger(advancedStats?.interceptions),
+    },
   ];
 
   return (
@@ -872,7 +957,7 @@ function PlayerPage() {
             )}
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-10">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-4 mt-10">
             <div className="bg-black/40 rounded-3xl p-6 border border-white/5">
               <h2 className="text-2xl font-bold mb-6">Performance 24/25</h2>
 
@@ -895,6 +980,16 @@ function PlayerPage() {
                 <div className="flex justify-between">
                   <span>Minutes</span>
                   <span>{formatInteger(player.minutes_played)}</span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span>xG</span>
+                  <span>{formatDecimal(performanceXg)}</span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span>xA</span>
+                  <span>{formatDecimal(performanceXa)}</span>
                 </div>
 
                 <div className="flex justify-between">
@@ -926,6 +1021,30 @@ function PlayerPage() {
             </div>
 
             <div className="bg-black/40 rounded-3xl p-6 border border-white/5">
+              <h2 className="text-2xl font-bold mb-6">Advanced Stats 24/25</h2>
+
+              {advancedStatsLoading ? (
+                <div className="flex h-40 items-center justify-center text-zinc-400 animate-pulse">
+                  Loading advanced stats...
+                </div>
+              ) : (
+                <div className="space-y-4 text-zinc-300">
+                  {advancedStatFields.map((field) => (
+                    <div
+                      key={field.label}
+                      className="flex justify-between gap-4"
+                    >
+                      <span>{field.label}</span>
+                      <span className="text-right font-semibold text-zinc-100">
+                        {field.value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-black/40 rounded-3xl p-6 border border-white/5">
               <h2 className="text-2xl font-bold mb-6">Risk Analysis</h2>
 
               <div className="space-y-4 text-zinc-300">
@@ -951,6 +1070,43 @@ function PlayerPage() {
                       : "-"}
                   </span>
                 </div>
+              </div>
+            </div>
+
+            <div className="bg-black/40 rounded-3xl p-6 border border-white/5">
+              <h2 className="text-2xl font-bold mb-6">National Team</h2>
+
+              <div className="mb-6 flex items-center gap-4">
+                {nationalTeamFlagUrl && (
+                  <img
+                    src={nationalTeamFlagUrl}
+                    alt=""
+                    className="h-12 w-12 shrink-0 rounded-full border border-white/10 bg-zinc-900 object-cover"
+                  />
+                )}
+
+                <div className="min-w-0">
+                  <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">
+                    Nationality
+                  </p>
+                  <p className="truncate text-lg font-black text-zinc-100">
+                    {formatKnownText(player.nationality)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4 text-zinc-300">
+                {nationalTeamFields.map((field) => (
+                  <div
+                    key={field.label}
+                    className="flex justify-between gap-4"
+                  >
+                    <span>{field.label}</span>
+                    <span className="text-right font-semibold text-zinc-100">
+                      {field.value}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
 

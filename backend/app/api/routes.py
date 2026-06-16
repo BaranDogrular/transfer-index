@@ -12,12 +12,14 @@ from app.models.transfer import (
     TeamNeed,
 )
 from app.models.player_db import PlayerDB
+from app.models.player_advanced_stats_db import PlayerAdvancedStatsDB
 from app.services.scoring_engine import TransferIndexEngine
 from app.services.ai_scout import AIScoutService
 from app.models.player_valuation_db import PlayerValuationDB
 from app.models.player_transfer_db import PlayerTransferDB
 from app.models.club_db import ClubDB
 from app.schemas.player_valuation import PlayerValuationResponse, PlayerValuationItem
+from app.utils.league_names import formatLeagueName
 
 
 router = APIRouter()
@@ -124,7 +126,7 @@ def serialize_search_player(player, club=None):
         "club": player.club,
         "club_id": player.current_club_id,
         "club_logo_url": club.logo_url if club else None,
-        "league": player.league,
+        "league": formatLeagueName(player.league),
         "position": player.position,
         "market_value_m": player.market_value_m,
         "image_url": player.image_url,
@@ -144,10 +146,16 @@ def serialize_player_detail(player, club=None):
         "club_logo_url": club.logo_url if club else None,
         "date_of_birth": player.date_of_birth,
         "nationality": player.nationality,
+        "country_flag_url": player.country_flag_url,
+        "national_team_id": player.national_team_id,
+        "national_team_name": player.national_team_name,
+        "national_team_flag_url": player.national_team_flag_url,
+        "international_caps": player.international_caps,
+        "international_goals": player.international_goals,
         "preferred_foot": player.preferred_foot,
         "height_cm": player.height_cm,
         "weight_kg": player.weight_kg,
-        "league": player.league,
+        "league": formatLeagueName(player.league),
         "image_url": player.image_url,
         "goals": player.goals,
         "assists": player.assists,
@@ -167,6 +175,34 @@ def serialize_player_detail(player, club=None):
         "injury_days": player.injury_days,
         "contract_years_left": player.contract_years_left,
         "contract_expiration_date": player.contract_expiration_date,
+    }
+
+
+def serialize_advanced_stats(player_id, stats=None, season="2024/25"):
+    return {
+        "player_id": player_id,
+        "season": stats.season if stats else season,
+        "source": stats.source if stats else "fbref",
+        "minutes": stats.minutes if stats else None,
+        "goals": stats.goals if stats else None,
+        "assists": stats.assists if stats else None,
+        "xg": stats.xg if stats else None,
+        "xa": stats.xa if stats else None,
+        "npxg": stats.npxg if stats else None,
+        "shots": stats.shots if stats else None,
+        "shots_on_target": stats.shots_on_target if stats else None,
+        "key_passes": stats.key_passes if stats else None,
+        "progressive_passes": stats.progressive_passes if stats else None,
+        "progressive_carries": stats.progressive_carries if stats else None,
+        "passes_into_final_third": stats.passes_into_final_third if stats else None,
+        "passes_into_penalty_area": stats.passes_into_penalty_area if stats else None,
+        "shot_creating_actions": stats.shot_creating_actions if stats else None,
+        "goal_creating_actions": stats.goal_creating_actions if stats else None,
+        "tackles": stats.tackles if stats else None,
+        "interceptions": stats.interceptions if stats else None,
+        "blocks": stats.blocks if stats else None,
+        "aerials_won": stats.aerials_won if stats else None,
+        "aerials_lost": stats.aerials_lost if stats else None,
     }
 
 
@@ -335,13 +371,20 @@ def search_players(
         "total": total,
         "page": page,
         "limit": limit,
-        "players": players,
+        "players": [
+            serialize_player_detail(player, club_map.get(player.current_club_id))
+            for player in players
+        ],
     }
 
 
 @router.get("/players")
 def get_players(db: Session = Depends(get_db)):
     players = db.query(PlayerDB).all()
+    club_map = get_club_by_id_map(
+        db,
+        [player.current_club_id for player in players],
+    )
 
     return {
         "count": len(players),
@@ -416,7 +459,7 @@ def get_club(club_id_or_name: str, db: Session = Depends(get_db)):
         "club_id": club.club_id if club else None,
         "club_name": club_name,
         "country": club.country if club else None,
-        "league": club.league if club else None,
+        "league": formatLeagueName(club.league) if club else "-",
         "logo_url": club.logo_url if club else None,
         "squad_count": len(players) if players else club.squad_size if club else 0,
         "average_age": average_age if average_age is not None else club.average_age if club else None,
@@ -444,7 +487,7 @@ def compare_players(
             "name": player.name,
             "image_url": player.image_url,
             "club": player.club,
-            "league": player.league,
+            "league": formatLeagueName(player.league),
             "position": player.position,
             "age": player.age,
             "height": player.height_cm,
@@ -489,6 +532,28 @@ def get_player(
     club = get_player_club(db, player)
 
     return serialize_player_detail(player, club)
+
+
+@router.get("/players/{player_id}/advanced-stats")
+def get_player_advanced_stats(
+    player_id: int,
+    season: str = "2024/25",
+    db: Session = Depends(get_db),
+):
+    player = db.query(PlayerDB).filter(PlayerDB.id == player_id).first()
+
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    stats = (
+        db.query(PlayerAdvancedStatsDB)
+        .filter(PlayerAdvancedStatsDB.player_id == player_id)
+        .filter(PlayerAdvancedStatsDB.season == season)
+        .filter(PlayerAdvancedStatsDB.source == "fbref")
+        .first()
+    )
+
+    return serialize_advanced_stats(player_id, stats, season)
 
 
 @router.get("/players/{player_id}/similar")
@@ -552,7 +617,7 @@ def get_similar_players(player_id: int, db: Session = Depends(get_db)):
                 "id": candidate.id,
                 "name": candidate.name,
                 "club": candidate.club,
-                "league": candidate.league,
+                "league": formatLeagueName(candidate.league),
                 "position": candidate.position,
                 "market_value_m": candidate.market_value_m,
                 "age": candidate.age,

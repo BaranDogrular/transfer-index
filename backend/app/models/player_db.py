@@ -26,6 +26,12 @@ class PlayerDB(Base):
     # PROFILE
     date_of_birth = Column(Date, nullable=True)
     nationality = Column(String)
+    country_flag_url = Column(String)
+    national_team_id = Column(Integer, nullable=True)
+    national_team_name = Column(String)
+    national_team_flag_url = Column(String)
+    international_caps = Column(Integer)
+    international_goals = Column(Integer)
     preferred_foot = Column(String)
 
     height_cm = Column(Integer)
@@ -68,6 +74,12 @@ class PlayerDB(Base):
 
     transfers = relationship(
         "PlayerTransferDB",
+        back_populates="player",
+        cascade="all, delete-orphan",
+    )
+
+    advanced_stats = relationship(
+        "PlayerAdvancedStatsDB",
         back_populates="player",
         cascade="all, delete-orphan",
     )
