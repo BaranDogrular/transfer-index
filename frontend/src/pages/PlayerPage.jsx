@@ -218,6 +218,17 @@ function PlayerPage() {
   const [score, setScore] = useState(null);
   const [aiReport, setAiReport] = useState(null);
   const [loadingAi, setLoadingAi] = useState(false);
+  const [scenarioModalOpen, setScenarioModalOpen] = useState(false);
+  const [scenarioTargetClub, setScenarioTargetClub] = useState("");
+  const [selectedScenarioClub, setSelectedScenarioClub] = useState(null);
+  const [clubSuggestions, setClubSuggestions] = useState([]);
+  const [clubSuggestionsLoading, setClubSuggestionsLoading] = useState(false);
+  const [scenarioResult, setScenarioResult] = useState(null);
+  const [scenarioLoading, setScenarioLoading] = useState(false);
+  const [scenarioError, setScenarioError] = useState("");
+  const [playerScoreResult, setPlayerScoreResult] = useState(null);
+  const [playerScoreLoading, setPlayerScoreLoading] = useState(false);
+  const [playerScoreError, setPlayerScoreError] = useState("");
 
   const [valuations, setValuations] = useState(null);
   const [valuationsLoading, setValuationsLoading] = useState(true);
@@ -228,6 +239,42 @@ function PlayerPage() {
   const [advancedStats, setAdvancedStats] = useState(null);
   const [advancedStatsLoading, setAdvancedStatsLoading] = useState(true);
   const [clubInfo, setClubInfo] = useState(null);
+
+  useEffect(() => {
+    const searchTerm = scenarioTargetClub.trim();
+
+    if (!scenarioModalOpen || selectedScenarioClub || searchTerm.length < 2) {
+      setClubSuggestions([]);
+      setClubSuggestionsLoading(false);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        setClubSuggestionsLoading(true);
+
+        const response = await fetch(
+          `http://127.0.0.1:8000/clubs/search?q=${encodeURIComponent(
+            searchTerm,
+          )}`,
+        );
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch clubs");
+        }
+
+        const data = await response.json();
+        setClubSuggestions(data || []);
+      } catch (error) {
+        console.error(error);
+        setClubSuggestions([]);
+      } finally {
+        setClubSuggestionsLoading(false);
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [scenarioModalOpen, scenarioTargetClub, selectedScenarioClub]);
 
   useEffect(() => {
     setClubInfo(null);
@@ -570,33 +617,33 @@ function PlayerPage() {
   );
 
   const getRecommendation = () => {
-    if (!score) return null;
+    if (!playerScoreResult) return null;
 
-    const value = score.transfer_index;
+    const value = playerScoreResult.player_score;
 
-    if (value >= 80) {
+    if (value >= 86) {
       return {
-        label: "ELITE TARGET",
+        label: "ELITE PLAYER",
         className: "bg-green-500/20 text-green-400",
       };
     }
 
-    if (value >= 65) {
+    if (value >= 76) {
       return {
-        label: "STRONG OPTION",
+        label: "HIGH QUALITY",
         className: "bg-cyan-500/20 text-cyan-300",
       };
     }
 
-    if (value >= 50) {
+    if (value >= 66) {
       return {
-        label: "MONITOR",
+        label: "STRONG PROSPECT",
         className: "bg-yellow-500/20 text-yellow-300",
       };
     }
 
     return {
-      label: "HIGH RISK",
+      label: "DEVELOPING",
       className: "bg-red-500/20 text-red-400",
     };
   };
@@ -654,6 +701,87 @@ function PlayerPage() {
       console.error(error);
     } finally {
       setLoadingAi(false);
+    }
+  };
+
+  const analyzePlayerScore = async () => {
+    setPlayerScoreError("");
+    setPlayerScoreResult(null);
+    setPlayerScoreLoading(true);
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:8000/players/${id}/player-score`,
+      );
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Player score analysis failed.");
+      }
+
+      setPlayerScoreResult(data);
+    } catch (error) {
+      console.error(error);
+      setPlayerScoreError(error.message || "Player score analysis failed.");
+    } finally {
+      setPlayerScoreLoading(false);
+    }
+  };
+
+  const openTransferScenarioModal = () => {
+    setScenarioModalOpen(true);
+    setScenarioError("");
+  };
+
+  const closeTransferScenarioModal = () => {
+    if (scenarioLoading) {
+      return;
+    }
+
+    setScenarioModalOpen(false);
+  };
+
+  const analyzeTransferScenario = async (event) => {
+    event.preventDefault();
+    setScenarioError("");
+    setScenarioResult(null);
+
+    const targetClub = (
+      selectedScenarioClub?.club_name || scenarioTargetClub
+    ).trim();
+
+    if (!targetClub) {
+      setScenarioError("Please enter a target club.");
+      return;
+    }
+
+    setScenarioLoading(true);
+
+    try {
+      const response = await fetch(
+        "http://127.0.0.1:8000/transfer-scenarios/analyze",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            player_id: Number(id),
+            target_club: targetClub,
+          }),
+        },
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Transfer scenario analysis failed.");
+      }
+
+      setScenarioResult(data);
+    } catch (error) {
+      console.error(error);
+      setScenarioError(error.message || "Transfer scenario analysis failed.");
+    } finally {
+      setScenarioLoading(false);
     }
   };
 
@@ -747,14 +875,6 @@ function PlayerPage() {
       value: formatInteger(player.international_goals),
     },
   ];
-  const performanceXg =
-    player.xg !== null && player.xg !== undefined && player.xg !== ""
-      ? player.xg
-      : advancedStats?.xg;
-  const performanceXa =
-    player.xa !== null && player.xa !== undefined && player.xa !== ""
-      ? player.xa
-      : advancedStats?.xa;
   const positionGroup = getPositionGroup(player.position);
   const advancedStatDefinitions = {
     minutes: {
@@ -869,6 +989,10 @@ function PlayerPage() {
       };
     })
     .filter(Boolean);
+  const scenarioAnalysis =
+    scenarioResult?.deterministic_analysis || scenarioResult;
+  const scenarioClub =
+    scenarioResult?.target_club_context || scenarioResult?.target_club;
 
   return (
     <div className="min-h-screen bg-black text-white overflow-hidden">
@@ -951,11 +1075,19 @@ function PlayerPage() {
 
                 <div className="mt-8 flex flex-col gap-3 sm:flex-row">
                   <button
-                    onClick={analyzeTransfer}
-                    disabled={loadingAi}
+                    onClick={analyzePlayerScore}
+                    disabled={playerScoreLoading}
+                    className="rounded-2xl bg-white px-6 py-4 font-black text-black transition-all hover:bg-zinc-200 disabled:opacity-50"
+                  >
+                    {playerScoreLoading ? "Scoring..." : "Player Score"}
+                  </button>
+
+                  <button
+                    onClick={openTransferScenarioModal}
+                    disabled={scenarioLoading}
                     className="rounded-2xl bg-cyan-400 px-6 py-4 font-black text-black transition-all hover:bg-cyan-300 disabled:opacity-50"
                   >
-                    {loadingAi ? "Analyzing..." : "Analyze Transfer"}
+                    Transfer Scenario
                   </button>
 
                   <Link
@@ -1042,14 +1174,14 @@ function PlayerPage() {
 
               <div className="mt-8 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-5">
                 <p className="text-xs font-bold uppercase tracking-wide text-cyan-300">
-                  Transfer Index
+                  Player Score
                 </p>
                 <div className="mt-2 flex items-end justify-between gap-4">
                   <span className="text-5xl font-black text-cyan-300">
-                    {score ? score.transfer_index : "--"}
+                    {playerScoreResult ? playerScoreResult.player_score : "--"}
                   </span>
                   <span className="pb-2 text-sm font-semibold text-zinc-400">
-                    AI Scout
+                    Club-independent
                   </span>
                 </div>
               </div>
@@ -1277,16 +1409,6 @@ function PlayerPage() {
                 </div>
 
                 <div className="flex justify-between">
-                  <span>xG</span>
-                  <span>{formatDecimal(performanceXg)}</span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span>xA</span>
-                  <span>{formatDecimal(performanceXa)}</span>
-                </div>
-
-                <div className="flex justify-between">
                   <span>Goals / 90</span>
                   <span>{formatDecimal(player.goals_per_90)}</span>
                 </div>
@@ -1414,46 +1536,6 @@ function PlayerPage() {
                 ))}
               </div>
             </div>
-
-            <div className="bg-black/40 rounded-3xl p-6 border border-white/5">
-              <h2 className="text-2xl font-bold mb-6">Contract & Profile</h2>
-
-              <div className="space-y-4 text-zinc-300">
-                <div className="flex justify-between">
-                  <span>Contract Until</span>
-                  <span>
-                    {formatContractDate(player.contract_expiration_date)}
-                  </span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span>Position</span>
-                  <span>{player.position || "-"}</span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span>Club</span>
-                  <span>
-                    {player.club ? (
-                      <Link
-                        to={clubPath || `/club/${encodeURIComponent(player.club)}`}
-                        className="inline-flex items-center gap-2 text-cyan-300 hover:text-cyan-200 transition-colors"
-                      >
-                        {renderClubLogo(clubLogoUrl)}
-                        {clubName || player.club}
-                      </Link>
-                    ) : (
-                      "-"
-                    )}
-                  </span>
-                </div>
-
-                <div className="flex justify-between">
-                  <span>Preferred Foot</span>
-                  <span>{player.preferred_foot || "-"}</span>
-                </div>
-              </div>
-            </div>
           </div>
 
           <div className="mt-10 bg-black/40 rounded-3xl p-8 border border-white/5">
@@ -1523,6 +1605,263 @@ function PlayerPage() {
               </div>
             )}
           </div>
+
+          {(playerScoreResult || playerScoreLoading || playerScoreError) && (
+            <div className="mt-10 rounded-3xl border border-white/5 bg-black/40 p-8">
+              <div className="mb-8">
+                <p className="text-xs font-bold uppercase text-cyan-300">
+                  Club-independent
+                </p>
+                <h2 className="mt-2 text-3xl font-black">Player Score</h2>
+              </div>
+
+              {playerScoreLoading && (
+                <div className="text-zinc-400 animate-pulse">
+                  Calculating player score...
+                </div>
+              )}
+
+              {playerScoreError && (
+                <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200">
+                  {playerScoreError}
+                </div>
+              )}
+
+              {playerScoreResult && (
+                <div className="space-y-5">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <div className="rounded-2xl border border-white/5 bg-zinc-950/70 p-5">
+                      <p className="text-sm text-zinc-400">Player Score</p>
+                      <p className="mt-2 text-4xl font-black text-cyan-300">
+                        {playerScoreResult.player_score ?? "-"}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-white/5 bg-zinc-950/70 p-5">
+                      <p className="text-sm text-zinc-400">Grade</p>
+                      <p className="mt-2 text-2xl font-black text-zinc-100">
+                        {playerScoreResult.grade || "-"}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-white/5 bg-zinc-950/70 p-5">
+                      <p className="text-sm text-zinc-400">Profile</p>
+                      <p className="mt-2 text-lg font-black text-zinc-100">
+                        {playerScoreResult.player?.position || "-"}
+                      </p>
+                      <p className="mt-1 text-sm text-zinc-500">
+                        {playerScoreResult.player?.age
+                          ? `${playerScoreResult.player.age} years old`
+                          : "-"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-white/5 bg-zinc-950/70 p-5">
+                    <p className="mb-2 text-sm font-bold uppercase text-zinc-500">
+                      Summary
+                    </p>
+                    <p className="leading-7 text-zinc-300">
+                      {playerScoreResult.summary || "-"}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="rounded-2xl border border-emerald-400/15 bg-emerald-500/5 p-5">
+                      <h3 className="mb-4 text-lg font-black text-emerald-300">
+                        Strengths
+                      </h3>
+                      <div className="space-y-3 text-sm text-zinc-300">
+                        {(playerScoreResult.strengths || []).map((item) => (
+                          <p key={item}>{item}</p>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-amber-400/15 bg-amber-500/5 p-5">
+                      <h3 className="mb-4 text-lg font-black text-amber-300">
+                        Risks
+                      </h3>
+                      <div className="space-y-3 text-sm text-zinc-300">
+                        {(playerScoreResult.risks || []).map((item) => (
+                          <p key={item}>{item}</p>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {scenarioModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6 backdrop-blur-md">
+              <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-cyan-400/20 bg-zinc-950 p-6 shadow-2xl shadow-cyan-950/40">
+                <div className="mb-6 flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-bold uppercase text-cyan-300">
+                      Transfer Scenario
+                    </p>
+                    <h2 className="mt-2 text-3xl font-black">
+                      Analyze Target Club Fit
+                    </h2>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={closeTransferScenarioModal}
+                    disabled={scenarioLoading}
+                    className="rounded-full border border-white/10 bg-white/5 px-4 py-2 font-bold text-zinc-300 transition-colors hover:bg-white/10 disabled:opacity-50"
+                  >
+                    X
+                  </button>
+                </div>
+
+                <form onSubmit={analyzeTransferScenario} className="space-y-4">
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-semibold text-zinc-300">
+                      Target Club
+                    </span>
+                    <div className="relative">
+                      <input
+                        value={scenarioTargetClub}
+                        onChange={(event) => {
+                          setScenarioTargetClub(event.target.value);
+                          setSelectedScenarioClub(null);
+                        }}
+                        placeholder="Barcelona, Arsenal, Manchester City..."
+                        className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-4 text-white outline-none transition-colors placeholder:text-zinc-600 focus:border-cyan-400/60"
+                      />
+
+                      {(clubSuggestionsLoading || clubSuggestions.length > 0) && (
+                        <div className="absolute left-0 right-0 top-full z-40 mt-2 overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl shadow-black/40">
+                          {clubSuggestionsLoading ? (
+                            <div className="px-4 py-3 text-sm text-zinc-400">
+                              Searching clubs...
+                            </div>
+                          ) : (
+                            clubSuggestions.map((club) => (
+                              <button
+                                key={club.club_id}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedScenarioClub(club);
+                                  setScenarioTargetClub(club.club_name);
+                                  setClubSuggestions([]);
+                                }}
+                                className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-white/5"
+                              >
+                                {club.logo_url && (
+                                  <img
+                                    src={club.logo_url}
+                                    alt=""
+                                    className="h-8 w-8 shrink-0 rounded-full bg-zinc-900 object-contain"
+                                  />
+                                )}
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate font-semibold text-zinc-100">
+                                    {club.club_name}
+                                  </span>
+                                  <span className="block truncate text-xs text-zinc-500">
+                                    {[club.league, club.country]
+                                      .filter(Boolean)
+                                      .join(" • ") || "-"}
+                                  </span>
+                                </span>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </label>
+
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                    <button
+                      type="submit"
+                      disabled={scenarioLoading}
+                      className="rounded-2xl bg-cyan-400 px-6 py-4 font-black text-black transition-colors hover:bg-cyan-300 disabled:opacity-50"
+                    >
+                      {scenarioLoading ? "Analyzing..." : "Analyze"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={closeTransferScenarioModal}
+                      disabled={scenarioLoading}
+                      className="rounded-2xl bg-white/10 px-6 py-4 font-black text-white transition-colors hover:bg-white/15 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+
+                {scenarioError && (
+                  <div className="mt-5 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200">
+                    {scenarioError}
+                  </div>
+                )}
+
+                {scenarioResult && (
+                  <div className="mt-6 space-y-5">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                      <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
+                        <p className="text-sm text-zinc-400">Fit Score</p>
+                        <p className="mt-2 text-4xl font-black text-cyan-300">
+                          {scenarioAnalysis?.fit_score ?? "-"}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
+                        <p className="text-sm text-zinc-400">Grade</p>
+                        <p className="mt-2 text-2xl font-black text-zinc-100">
+                          {scenarioAnalysis?.grade || "-"}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
+                        <p className="text-sm text-zinc-400">Target Club</p>
+                        <p className="mt-2 text-lg font-black text-zinc-100">
+                          {scenarioClub?.club_name || "-"}
+                        </p>
+                        <p className="mt-1 text-sm text-zinc-500">
+                          {scenarioClub?.league || "-"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
+                      <p className="mb-2 text-sm font-bold uppercase text-zinc-500">
+                        Summary
+                      </p>
+                      <p className="leading-7 text-zinc-300">
+                        {scenarioAnalysis?.summary || "-"}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div className="rounded-2xl border border-emerald-400/15 bg-emerald-500/5 p-5">
+                        <h3 className="mb-4 text-lg font-black text-emerald-300">
+                          Strengths
+                        </h3>
+                        <div className="space-y-3 text-sm text-zinc-300">
+                          {(scenarioAnalysis?.strengths || []).map((item) => (
+                            <p key={item}>{item}</p>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-amber-400/15 bg-amber-500/5 p-5">
+                        <h3 className="mb-4 text-lg font-black text-amber-300">
+                          Risks
+                        </h3>
+                        <div className="space-y-3 text-sm text-zinc-300">
+                          {(scenarioAnalysis?.risks || []).map((item) => (
+                            <p key={item}>{item}</p>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {(score || loadingAi) && (
             <div className="mt-10 bg-black/40 rounded-3xl p-8 border border-cyan-500/20">

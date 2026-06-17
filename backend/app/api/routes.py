@@ -11,6 +11,7 @@ from app.models.transfer import (
     PlayerData,
     TeamNeed,
 )
+from app.models.transfer_scenario import TransferScenarioRequest
 from app.models.player_db import PlayerDB
 from app.models.player_advanced_stats_db import PlayerAdvancedStatsDB
 from app.services.scoring_engine import TransferIndexEngine
@@ -19,6 +20,9 @@ from app.models.player_valuation_db import PlayerValuationDB
 from app.models.player_transfer_db import PlayerTransferDB
 from app.models.club_db import ClubDB
 from app.schemas.player_valuation import PlayerValuationResponse, PlayerValuationItem
+from app.services.player_context import build_player_context
+from app.services.player_score import analyze_player_score
+from app.services.transfer_scenario_analyzer import build_transfer_scenario_context
 from app.utils.league_names import formatLeagueName
 
 
@@ -234,6 +238,29 @@ def calculate_transfer_score(request: TransferRequest):
     return engine.calculate(request.player, request.team)
 
 
+@router.post("/transfer-scenarios/analyze")
+def analyze_transfer_scenario_endpoint(
+    request: TransferScenarioRequest,
+    db: Session = Depends(get_db),
+):
+    if not request.target_club.strip():
+        raise HTTPException(status_code=400, detail="Target club is required")
+
+    result = build_transfer_scenario_context(
+        request.player_id,
+        request.target_club.strip(),
+        db,
+    )
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    if result.get("error") == "Target club not found":
+        raise HTTPException(status_code=404, detail="Target club not found")
+
+    return result
+
+
 @router.post("/players")
 def create_player(
     player: PlayerData,
@@ -410,6 +437,67 @@ def get_players(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/clubs/search")
+def search_clubs(
+    q: str = "",
+    limit: int = 10,
+    db: Session = Depends(get_db),
+):
+    normalized_query = normalize_search_query(q) if q else ""
+
+    if len(normalized_query) < 2:
+        return []
+
+    normalized_name = normalized_column(ClubDB.name)
+    contains_query = f"%{normalized_query}%"
+    starts_query = f"{normalized_query}%"
+    elite_leagues = [
+        "premier-league",
+        "gb1",
+        "laliga",
+        "es1",
+        "serie-a",
+        "it1",
+        "bundesliga",
+        "l1",
+        "ligue-1",
+        "fr1",
+    ]
+    match_rank = case(
+        (normalized_name == normalized_query, 0),
+        (normalized_name.like(starts_query), 1),
+        (normalized_name.like(contains_query), 2),
+        else_=3,
+    )
+    league_rank = case((ClubDB.league.in_(elite_leagues), 0), else_=1)
+    result_limit = max(1, min(limit, 10))
+    clubs = (
+        db.query(ClubDB)
+        .filter(normalized_name.like(contains_query))
+        .order_by(
+            match_rank.asc(),
+            league_rank.asc(),
+            ClubDB.total_market_value.desc().nullslast(),
+            ClubDB.squad_size.desc().nullslast(),
+            func.length(ClubDB.name).asc(),
+            ClubDB.name.asc(),
+        )
+        .limit(result_limit)
+        .all()
+    )
+
+    return [
+        {
+            "club_id": club.club_id,
+            "club_name": club.name,
+            "league": formatLeagueName(club.league),
+            "country": club.country,
+            "logo_url": club.logo_url,
+        }
+        for club in clubs
+    ]
+
+
 @router.get("/clubs/{club_id_or_name}")
 def get_club(club_id_or_name: str, db: Session = Depends(get_db)):
     club = None
@@ -541,6 +629,32 @@ def get_player(
     club = get_player_club(db, player)
 
     return serialize_player_detail(player, club)
+
+
+@router.get("/players/{player_id}/ai-context")
+def get_player_ai_context(
+    player_id: int,
+    db: Session = Depends(get_db),
+):
+    context = build_player_context(player_id, db)
+
+    if not context:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    return context
+
+
+@router.get("/players/{player_id}/player-score")
+def get_player_score(
+    player_id: int,
+    db: Session = Depends(get_db),
+):
+    result = analyze_player_score(player_id, db)
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    return result
 
 
 @router.get("/players/{player_id}/advanced-stats")
