@@ -225,6 +225,7 @@ function PlayerPage() {
   const [clubSuggestionsLoading, setClubSuggestionsLoading] = useState(false);
   const [scenarioResult, setScenarioResult] = useState(null);
   const [scenarioLoading, setScenarioLoading] = useState(false);
+  const [scenarioAiLoading, setScenarioAiLoading] = useState(false);
   const [scenarioError, setScenarioError] = useState("");
   const [playerScoreResult, setPlayerScoreResult] = useState(null);
   const [playerScoreLoading, setPlayerScoreLoading] = useState(false);
@@ -734,7 +735,7 @@ function PlayerPage() {
   };
 
   const closeTransferScenarioModal = () => {
-    if (scenarioLoading) {
+    if (scenarioLoading || scenarioAiLoading) {
       return;
     }
 
@@ -782,6 +783,51 @@ function PlayerPage() {
       setScenarioError(error.message || "Transfer scenario analysis failed.");
     } finally {
       setScenarioLoading(false);
+    }
+  };
+
+  const analyzeTransferScenarioAi = async () => {
+    setScenarioError("");
+    setScenarioResult(null);
+
+    const targetClub = (
+      selectedScenarioClub?.club_name || scenarioTargetClub
+    ).trim();
+
+    if (!targetClub) {
+      setScenarioError("Please enter a target club.");
+      return;
+    }
+
+    setScenarioAiLoading(true);
+
+    try {
+      const response = await fetch(
+        "http://127.0.0.1:8000/transfer-scenarios/ai-analyze",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            player_id: Number(id),
+            target_club: targetClub,
+          }),
+        },
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "AI transfer scenario analysis failed.");
+      }
+
+      setScenarioResult(data);
+    } catch (error) {
+      console.error(error);
+      setScenarioError(
+        error.message || "AI transfer scenario analysis failed.",
+      );
+    } finally {
+      setScenarioAiLoading(false);
     }
   };
 
@@ -992,7 +1038,13 @@ function PlayerPage() {
   const scenarioAnalysis =
     scenarioResult?.deterministic_analysis || scenarioResult;
   const scenarioClub =
-    scenarioResult?.target_club_context || scenarioResult?.target_club;
+    scenarioResult?.target_club_context ||
+    scenarioResult?.scenario_context?.target_club_context ||
+    scenarioResult?.target_club;
+  const scenarioClubName =
+    scenarioClub?.club_name || selectedScenarioClub?.club_name || scenarioTargetClub;
+  const scenarioClubLeague =
+    scenarioClub?.league || selectedScenarioClub?.league || "";
 
   return (
     <div className="min-h-screen bg-black text-white overflow-hidden">
@@ -1708,7 +1760,7 @@ function PlayerPage() {
                   <button
                     type="button"
                     onClick={closeTransferScenarioModal}
-                    disabled={scenarioLoading}
+                    disabled={scenarioLoading || scenarioAiLoading}
                     className="rounded-full border border-white/10 bg-white/5 px-4 py-2 font-bold text-zinc-300 transition-colors hover:bg-white/10 disabled:opacity-50"
                   >
                     X
@@ -1777,15 +1829,23 @@ function PlayerPage() {
                   <div className="flex flex-col gap-3 sm:flex-row">
                     <button
                       type="submit"
-                      disabled={scenarioLoading}
+                      disabled={scenarioLoading || scenarioAiLoading}
                       className="rounded-2xl bg-cyan-400 px-6 py-4 font-black text-black transition-colors hover:bg-cyan-300 disabled:opacity-50"
                     >
                       {scenarioLoading ? "Analyzing..." : "Analyze"}
                     </button>
                     <button
                       type="button"
+                      onClick={analyzeTransferScenarioAi}
+                      disabled={scenarioLoading || scenarioAiLoading}
+                      className="rounded-2xl bg-white px-6 py-4 font-black text-black transition-colors hover:bg-zinc-200 disabled:opacity-50"
+                    >
+                      {scenarioAiLoading ? "AI Analyzing..." : "AI Analyze"}
+                    </button>
+                    <button
+                      type="button"
                       onClick={closeTransferScenarioModal}
-                      disabled={scenarioLoading}
+                      disabled={scenarioLoading || scenarioAiLoading}
                       className="rounded-2xl bg-white/10 px-6 py-4 font-black text-white transition-colors hover:bg-white/15 disabled:opacity-50"
                     >
                       Cancel
@@ -1801,6 +1861,12 @@ function PlayerPage() {
 
                 {scenarioResult && (
                   <div className="mt-6 space-y-5">
+                    {scenarioResult.source === "fallback" && (
+                      <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm font-semibold text-amber-200">
+                        AI unavailable, deterministic fallback used.
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                       <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
                         <p className="text-sm text-zinc-400">Fit Score</p>
@@ -1817,13 +1883,62 @@ function PlayerPage() {
                       <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
                         <p className="text-sm text-zinc-400">Target Club</p>
                         <p className="mt-2 text-lg font-black text-zinc-100">
-                          {scenarioClub?.club_name || "-"}
+                          {scenarioClubName || "-"}
                         </p>
                         <p className="mt-1 text-sm text-zinc-500">
-                          {scenarioClub?.league || "-"}
+                          {scenarioClubLeague || "-"}
                         </p>
                       </div>
                     </div>
+
+                    {(scenarioAnalysis?.recommendation ||
+                      scenarioAnalysis?.tactical_fit ||
+                      scenarioAnalysis?.financial_risk ||
+                      scenarioAnalysis?.contract_risk ||
+                      scenarioAnalysis?.market_value_projection) && (
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
+                          <p className="text-sm font-bold uppercase text-zinc-500">
+                            Recommendation
+                          </p>
+                          <p className="mt-2 leading-7 text-zinc-200">
+                            {scenarioAnalysis?.recommendation || "-"}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
+                          <p className="text-sm font-bold uppercase text-zinc-500">
+                            Tactical Fit
+                          </p>
+                          <p className="mt-2 leading-7 text-zinc-200">
+                            {scenarioAnalysis?.tactical_fit || "-"}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
+                          <p className="text-sm font-bold uppercase text-zinc-500">
+                            Financial Risk
+                          </p>
+                          <p className="mt-2 leading-7 text-zinc-200">
+                            {scenarioAnalysis?.financial_risk || "-"}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
+                          <p className="text-sm font-bold uppercase text-zinc-500">
+                            Contract Risk
+                          </p>
+                          <p className="mt-2 leading-7 text-zinc-200">
+                            {scenarioAnalysis?.contract_risk || "-"}
+                          </p>
+                        </div>
+                        <div className="rounded-2xl border border-white/5 bg-black/40 p-5 md:col-span-2">
+                          <p className="text-sm font-bold uppercase text-zinc-500">
+                            Market Value Projection
+                          </p>
+                          <p className="mt-2 leading-7 text-zinc-200">
+                            {scenarioAnalysis?.market_value_projection || "-"}
+                          </p>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
                       <p className="mb-2 text-sm font-bold uppercase text-zinc-500">

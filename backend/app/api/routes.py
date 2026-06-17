@@ -23,6 +23,7 @@ from app.schemas.player_valuation import PlayerValuationResponse, PlayerValuatio
 from app.services.player_context import build_player_context
 from app.services.player_score import analyze_player_score
 from app.services.transfer_scenario_analyzer import build_transfer_scenario_context
+from app.services.transfer_scenario_ai import analyze_transfer_scenario_with_ai
 from app.utils.league_names import formatLeagueName
 
 
@@ -247,6 +248,29 @@ def analyze_transfer_scenario_endpoint(
         raise HTTPException(status_code=400, detail="Target club is required")
 
     result = build_transfer_scenario_context(
+        request.player_id,
+        request.target_club.strip(),
+        db,
+    )
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    if result.get("error") == "Target club not found":
+        raise HTTPException(status_code=404, detail="Target club not found")
+
+    return result
+
+
+@router.post("/transfer-scenarios/ai-analyze")
+def prepare_transfer_scenario_ai_analyze(
+    request: TransferScenarioRequest,
+    db: Session = Depends(get_db),
+):
+    if not request.target_club.strip():
+        raise HTTPException(status_code=400, detail="Target club is required")
+
+    result = analyze_transfer_scenario_with_ai(
         request.player_id,
         request.target_club.strip(),
         db,

@@ -10,6 +10,19 @@ TOP_LEAGUES = {
     "Ligue 1",
 }
 
+EXPECTED_AI_RESPONSE_SCHEMA = {
+    "fit_score": 0,
+    "grade": "",
+    "strengths": [],
+    "risks": [],
+    "tactical_fit": "",
+    "financial_risk": "",
+    "contract_risk": "",
+    "market_value_projection": "",
+    "summary": "",
+    "recommendation": "",
+}
+
 
 def clamp_score(value):
     return max(0, min(100, round(value)))
@@ -339,3 +352,28 @@ def build_transfer_scenario_context(player_id, target_club, db):
 
 def analyze_transfer_scenario(player_id, target_club, db):
     return build_transfer_scenario_context(player_id, target_club, db)
+
+
+def build_ai_prompt_preview(scenario_context):
+    scenario = scenario_context.get("scenario") or {}
+    deterministic_analysis = scenario_context.get("deterministic_analysis") or {}
+    player_context = scenario_context.get("player_context") or {}
+    club_context = scenario_context.get("target_club_context") or {}
+    profile = player_context.get("profile") or {}
+
+    return (
+        "Analyze this transfer scenario using the provided structured context. "
+        f"Player: {scenario.get('player_name')}. "
+        f"Target club: {scenario.get('target_club')}. "
+        f"Source club: {scenario.get('source_club')}. "
+        f"Position: {scenario.get('position')}. "
+        f"Player age: {profile.get('age')}. "
+        f"Target league: {club_context.get('league')}. "
+        f"Deterministic baseline: {deterministic_analysis.get('fit_score')}/100 "
+        f"({deterministic_analysis.get('grade')}). "
+        "Return only JSON matching the expected AI response schema."
+    )
+
+
+def get_expected_ai_response_schema():
+    return EXPECTED_AI_RESPONSE_SCHEMA.copy()

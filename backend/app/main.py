@@ -8,6 +8,7 @@ from app.models.player_advanced_stats_db import PlayerAdvancedStatsDB
 from app.models.player_valuation_db import PlayerValuationDB
 from app.models.player_transfer_db import PlayerTransferDB
 from app.models.club_db import ClubDB
+from app.models.transfer_scenario_analysis_db import TransferScenarioAnalysisDB
 
 Base.metadata.create_all(bind=engine)
 
