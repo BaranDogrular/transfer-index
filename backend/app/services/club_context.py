@@ -1,6 +1,6 @@
 import re
 import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from app.database import SessionLocal
 from app.models.club_db import ClubDB
@@ -46,6 +46,19 @@ def clean_value(value):
 
 def league_priority(club):
     return 1 if formatLeagueName(club.league) in ELITE_LEAGUES else 0
+
+
+def get_age_bucket(age):
+    if age is None:
+        return "unknown"
+    if age <= 22:
+        return "18-22"
+    if age <= 27:
+        return "23-27"
+    if age <= 31:
+        return "28-31"
+
+    return "32+"
 
 
 def resolve_club(db, club_name):
@@ -169,7 +182,16 @@ def build_club_context(club_name, db=None):
         else:
             total_market_value = None
         average_age = round(sum(ages) / len(ages), 1) if ages else None
+        average_market_value = (
+            round(total_market_value / len(market_values), 2)
+            if total_market_value is not None and market_values
+            else None
+        )
         players_by_position = defaultdict(list)
+        nationality_distribution = Counter(
+            player.nationality for player in players if player.nationality
+        )
+        age_distribution = Counter(get_age_bucket(player.age) for player in players)
 
         for player in players:
             position = player.position or "Unknown"
@@ -178,7 +200,10 @@ def build_club_context(club_name, db=None):
                     "id": player.id,
                     "name": player.name,
                     "age": player.age,
+                    "nationality": player.nationality,
                     "position": player.position,
+                    "club": player.club,
+                    "league": formatLeagueName(player.league),
                     "market_value_m": player.market_value_m,
                     "image_url": player.image_url,
                 }
@@ -191,17 +216,21 @@ def build_club_context(club_name, db=None):
             "squad_count": len(players) if players else club.squad_size if club else None,
             "average_age": average_age if average_age is not None else club.average_age if club else None,
             "total_market_value": total_market_value,
+            "average_market_value": average_market_value,
             "top_players": [
                 {
                     "id": player.id,
                     "name": player.name,
                     "position": player.position,
                     "age": player.age,
+                    "nationality": player.nationality,
                     "market_value_m": player.market_value_m,
                     "image_url": player.image_url,
                 }
                 for player in players[:8]
             ],
+            "nationality_distribution": dict(nationality_distribution),
+            "age_distribution": dict(age_distribution),
             "position_distribution": {
                 position: len(position_players)
                 for position, position_players in sorted(players_by_position.items())

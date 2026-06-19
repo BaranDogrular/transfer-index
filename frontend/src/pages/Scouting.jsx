@@ -1,10 +1,19 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+const EMPTY_FILTER_OPTIONS = {
+  positions: [],
+  nationalities: [],
+  leagues: [],
+  clubs: [],
+  preferred_feet: [],
+};
+
 export default function Scouting() {
   const navigate = useNavigate();
 
   const [players, setPlayers] = useState([]);
+  const [filterOptions, setFilterOptions] = useState(EMPTY_FILTER_OPTIONS);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -14,8 +23,17 @@ export default function Scouting() {
   const [activeAutocompleteIndex, setActiveAutocompleteIndex] = useState(-1);
 
   const [positionFilter, setPositionFilter] = useState("");
+  const [nationalityFilter, setNationalityFilter] = useState("");
+  const [leagueFilter, setLeagueFilter] = useState("");
+  const [clubFilter, setClubFilter] = useState("");
+  const [preferredFootFilter, setPreferredFootFilter] = useState("");
+  const [minAge, setMinAge] = useState("");
   const [maxAge, setMaxAge] = useState("");
+  const [minValue, setMinValue] = useState("");
   const [maxValue, setMaxValue] = useState("");
+  const [minMinutes, setMinMinutes] = useState("");
+  const [minGoals, setMinGoals] = useState("");
+  const [minAssists, setMinAssists] = useState("");
 
   const [page, setPage] = useState(1);
   const [totalPlayers, setTotalPlayers] = useState(0);
@@ -41,12 +59,48 @@ export default function Scouting() {
         params.append("position", positionFilter);
       }
 
+      if (nationalityFilter) {
+        params.append("nationality", nationalityFilter);
+      }
+
+      if (leagueFilter) {
+        params.append("league", leagueFilter);
+      }
+
+      if (clubFilter) {
+        params.append("club", clubFilter);
+      }
+
+      if (preferredFootFilter) {
+        params.append("preferred_foot", preferredFootFilter);
+      }
+
+      if (minAge) {
+        params.append("min_age", minAge);
+      }
+
       if (maxAge) {
         params.append("max_age", maxAge);
       }
 
+      if (minValue) {
+        params.append("min_value", minValue);
+      }
+
       if (maxValue) {
         params.append("max_value", maxValue);
+      }
+
+      if (minMinutes) {
+        params.append("min_minutes", minMinutes);
+      }
+
+      if (minGoals) {
+        params.append("min_goals", minGoals);
+      }
+
+      if (minAssists) {
+        params.append("min_assists", minAssists);
       }
 
       const response = await fetch(
@@ -71,8 +125,17 @@ export default function Scouting() {
     setAutocompleteOpen(false);
     setActiveAutocompleteIndex(-1);
     setPositionFilter("");
+    setNationalityFilter("");
+    setLeagueFilter("");
+    setClubFilter("");
+    setPreferredFootFilter("");
+    setMinAge("");
     setMaxAge("");
+    setMinValue("");
     setMaxValue("");
+    setMinMinutes("");
+    setMinGoals("");
+    setMinAssists("");
     setPage(1);
   };
 
@@ -119,33 +182,65 @@ export default function Scouting() {
     if (score >= 85) {
       return {
         label: "ELITE TARGET",
-        color: "text-green-400",
-        bg: "bg-green-500/20",
+        color: "score-high",
+        bg: "scout-badge scout-badge-success",
       };
     }
 
     if (score >= 70) {
       return {
         label: "STRONG OPTION",
-        color: "text-cyan-400",
-        bg: "bg-cyan-500/20",
+        color: "score-medium",
+        bg: "scout-badge scout-badge-cyan",
       };
     }
 
     if (score >= 55) {
       return {
         label: "MONITOR",
-        color: "text-yellow-400",
-        bg: "bg-yellow-500/20",
+        color: "score-warning",
+        bg: "scout-badge scout-badge-warning",
       };
     }
 
     return {
       label: "HIGH RISK",
-      color: "text-red-400",
-      bg: "bg-red-500/20",
+      color: "score-risk",
+      bg: "scout-badge scout-badge-danger",
     };
   };
+
+  const getScoreToneClass = (score) => {
+    if (score >= 85) return "score-high";
+    if (score >= 70) return "score-medium";
+    if (score >= 55) return "score-warning";
+    return "score-risk";
+  };
+
+  useEffect(() => {
+    const loadFilterOptions = async () => {
+      try {
+        const response = await fetch(
+          "http://127.0.0.1:8000/players/filter-options",
+        );
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch filter options");
+        }
+
+        const data = await response.json();
+        setFilterOptions({
+          ...EMPTY_FILTER_OPTIONS,
+          ...data,
+        });
+      } catch (error) {
+        console.error("FILTER OPTIONS ERROR:", error);
+        setFilterOptions(EMPTY_FILTER_OPTIONS);
+      }
+    };
+
+    loadFilterOptions();
+  }, []);
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -191,14 +286,90 @@ export default function Scouting() {
 
   useEffect(() => {
     setPage(1);
-  }, [positionFilter, maxAge, maxValue]);
+  }, [
+    positionFilter,
+    nationalityFilter,
+    leagueFilter,
+    clubFilter,
+    preferredFootFilter,
+    minAge,
+    maxAge,
+    minValue,
+    maxValue,
+    minMinutes,
+    minGoals,
+    minAssists,
+  ]);
 
   useEffect(() => {
     loadPlayers();
-  }, [debouncedQuery, positionFilter, maxAge, maxValue, page]);
+  }, [
+    debouncedQuery,
+    positionFilter,
+    nationalityFilter,
+    leagueFilter,
+    clubFilter,
+    preferredFootFilter,
+    minAge,
+    maxAge,
+    minValue,
+    maxValue,
+    minMinutes,
+    minGoals,
+    minAssists,
+    page,
+  ]);
+
+  const filterControlClass =
+    "h-12 w-full rounded-2xl border border-white/10 bg-black/40 px-4 text-white outline-none transition-colors placeholder:text-zinc-500 focus:border-cyan-400";
+
+  const renderFilterLabel = (label) => (
+    <span className="mb-2 block text-sm font-semibold text-zinc-300">
+      {label}
+    </span>
+  );
+
+  const renderSelectFilter = (label, value, onChange, options, placeholder) => (
+    <label className="block">
+      {renderFilterLabel(label)}
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className={filterControlClass}
+      >
+        <option value="">{placeholder}</option>
+        {options.map((option) => {
+          const optionValue =
+            typeof option === "string" ? option : option.value;
+          const optionLabel =
+            typeof option === "string" ? option : option.label || option.value;
+
+          return (
+            <option key={optionValue} value={optionValue}>
+              {optionLabel}
+            </option>
+          );
+        })}
+      </select>
+    </label>
+  );
+
+  const renderNumberFilter = (label, value, onChange, placeholder) => (
+    <label className="block">
+      {renderFilterLabel(label)}
+      <input
+        type="number"
+        inputMode="numeric"
+        placeholder={placeholder}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className={filterControlClass}
+      />
+    </label>
+  );
 
   return (
-    <div className="min-h-screen bg-black text-white px-6 py-10">
+    <div className="scout-theme min-h-screen px-6 py-10 text-white">
       <div className="max-w-7xl mx-auto">
         {/* HEADER */}
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 mb-10">
@@ -216,12 +387,32 @@ export default function Scouting() {
         </div>
 
         {/* FILTERS */}
-        <div className="bg-white/5 border border-white/10 rounded-3xl p-6 mb-8">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="relative md:col-span-2">
+        <div className="mb-8 rounded-3xl border border-white/10 bg-white/5 p-6">
+          <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <div>
+              <h2 className="text-xl font-black">Filters</h2>
+              <p className="mt-1 text-sm text-zinc-400">
+                {loading
+                  ? "Loading players..."
+                  : `${totalPlayers.toLocaleString()} players found`}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="scout-secondary-button h-12 rounded-2xl px-5 font-bold transition md:self-end"
+            >
+              Reset
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-4">
+            <label className="relative block md:col-span-2">
+              {renderFilterLabel("Search Player")}
               <input
                 type="text"
-                placeholder="Search player..."
+                placeholder="Search by player name"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onFocus={() => {
@@ -262,19 +453,7 @@ export default function Scouting() {
                     );
                   }
                 }}
-                className="
-                  w-full
-                  bg-black/40
-                  border
-                  border-white/10
-                  rounded-2xl
-                  px-4
-                  py-3
-                  text-white
-                  placeholder:text-zinc-500
-                  outline-none
-                  focus:border-cyan-400
-                "
+                className={filterControlClass}
               />
 
               {autocompleteOpen && searchQuery.trim().length >= 2 && (
@@ -340,95 +519,63 @@ export default function Scouting() {
                   )}
                 </div>
               )}
-            </div>
+            </label>
 
-            <select
-              value={positionFilter}
-              onChange={(e) => setPositionFilter(e.target.value)}
-              className="
-                bg-black/40
-                border
-                border-white/10
-                rounded-2xl
-                px-4
-                py-3
-                text-white
-                outline-none
-                focus:border-cyan-400
-              "
-            >
-              <option value="">All Positions</option>
-              <option value="Goalkeeper">Goalkeeper</option>
-              <option value="Defender">Defender</option>
-              <option value="Midfield">Midfield</option>
-              <option value="Attack">Attack</option>
-              <option value="Centre-Forward">Centre-Forward</option>
-              <option value="Left Winger">Left Winger</option>
-              <option value="Right Winger">Right Winger</option>
-              <option value="Attacking Midfield">Attacking Midfield</option>
-              <option value="Defensive Midfield">Defensive Midfield</option>
-              <option value="Centre-Back">Centre-Back</option>
-              <option value="Left-Back">Left-Back</option>
-              <option value="Right-Back">Right-Back</option>
-            </select>
+            {renderSelectFilter(
+              "Position",
+              positionFilter,
+              setPositionFilter,
+              filterOptions.positions,
+              "All positions",
+            )}
 
-            <button
-              onClick={resetFilters}
-              className="
-                px-5
-                py-3
-                rounded-2xl
-                bg-white/10
-                hover:bg-white/20
-                transition
-              "
-            >
-              Reset
-            </button>
+            {renderSelectFilter(
+              "Nationality",
+              nationalityFilter,
+              setNationalityFilter,
+              filterOptions.nationalities,
+              "All nationalities",
+            )}
+            {renderSelectFilter(
+              "League",
+              leagueFilter,
+              setLeagueFilter,
+              filterOptions.leagues,
+              "All leagues",
+            )}
+            {renderSelectFilter(
+              "Club",
+              clubFilter,
+              setClubFilter,
+              filterOptions.clubs,
+              "All clubs",
+            )}
+            {renderSelectFilter(
+              "Preferred Foot",
+              preferredFootFilter,
+              setPreferredFootFilter,
+              filterOptions.preferred_feet,
+              "Any foot",
+            )}
 
-            <input
-              type="number"
-              placeholder="Max Age"
-              value={maxAge}
-              onChange={(e) => setMaxAge(e.target.value)}
-              className="
-                bg-black/40
-                border
-                border-white/10
-                rounded-2xl
-                px-4
-                py-3
-                text-white
-                placeholder:text-zinc-500
-                outline-none
-                focus:border-cyan-400
-              "
-            />
+            {renderNumberFilter("Min Age", minAge, setMinAge, "18")}
+            {renderNumberFilter("Max Age", maxAge, setMaxAge, "25")}
+            {renderNumberFilter("Min Value (€M)", minValue, setMinValue, "5")}
+            {renderNumberFilter("Max Value (€M)", maxValue, setMaxValue, "50")}
+            {renderNumberFilter(
+              "Min Minutes",
+              minMinutes,
+              setMinMinutes,
+              "900",
+            )}
+            {renderNumberFilter("Min Goals", minGoals, setMinGoals, "5")}
+            {renderNumberFilter(
+              "Min Assists",
+              minAssists,
+              setMinAssists,
+              "5",
+            )}
 
-            <input
-              type="number"
-              placeholder="Max Value (€M)"
-              value={maxValue}
-              onChange={(e) => setMaxValue(e.target.value)}
-              className="
-                bg-black/40
-                border
-                border-white/10
-                rounded-2xl
-                px-4
-                py-3
-                text-white
-                placeholder:text-zinc-500
-                outline-none
-                focus:border-cyan-400
-              "
-            />
-          </div>
-
-          <div className="mt-5 text-sm text-zinc-400">
-            {loading
-              ? "Loading players..."
-              : `${totalPlayers.toLocaleString()} players found`}
           </div>
         </div>
 
@@ -510,7 +657,7 @@ export default function Scouting() {
                       </td>
 
                       <td className="px-6 py-5">
-                        <div className="text-2xl font-black text-cyan-300">
+                        <div className={`text-2xl font-black ${getScoreToneClass(score)}`}>
                           {score}
                         </div>
                       </td>
@@ -559,12 +706,10 @@ export default function Scouting() {
               <button
                 disabled={page <= 1 || loading}
                 onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
-                className="
+                className="scout-secondary-button
                   px-4
                   py-2
                   rounded-xl
-                  bg-white/10
-                  hover:bg-white/20
                   disabled:opacity-40
                   disabled:cursor-not-allowed
                   transition
@@ -576,13 +721,10 @@ export default function Scouting() {
               <button
                 disabled={page >= totalPages || loading}
                 onClick={() => setPage((prev) => prev + 1)}
-                className="
+                className="scout-primary-button
                   px-4
                   py-2
                   rounded-xl
-                  bg-cyan-500/20
-                  hover:bg-cyan-500/30
-                  text-cyan-300
                   disabled:opacity-40
                   disabled:cursor-not-allowed
                   transition

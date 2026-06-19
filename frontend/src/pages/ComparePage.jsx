@@ -134,7 +134,7 @@ function PlayerSearchBox({
         <button
           type="button"
           onClick={onClear}
-          className="absolute right-3 top-10 rounded-xl bg-white/10 px-3 py-1 text-xs font-bold text-zinc-300 transition-colors hover:bg-white/20"
+          className="scout-secondary-button absolute right-3 top-10 rounded-xl px-3 py-1 text-xs font-bold transition-colors"
         >
           Clear
         </button>
@@ -349,7 +349,7 @@ export default function ComparePage() {
   const player2 = comparison?.player2;
 
   return (
-    <div className="min-h-screen bg-black px-6 py-10 text-white">
+    <div className="scout-theme min-h-screen px-6 py-10 text-white">
       <div className="mx-auto max-w-7xl">
         <div className="mb-10 flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
           <div>

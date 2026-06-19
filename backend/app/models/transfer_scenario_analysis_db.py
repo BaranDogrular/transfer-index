@@ -22,14 +22,18 @@ class TransferScenarioAnalysisDB(Base):
 
     fit_score = Column(Integer, nullable=True)
     grade = Column(String, nullable=True)
+    sub_scores = Column(JSON, nullable=True)
     strengths = Column(JSON, nullable=True)
     risks = Column(JSON, nullable=True)
+    recommendation = Column(Text, nullable=True)
+    summary = Column(Text, nullable=True)
     tactical_fit = Column(Text, nullable=True)
     financial_risk = Column(Text, nullable=True)
     contract_risk = Column(Text, nullable=True)
+    squad_fit = Column(Text, nullable=True)
+    culture_fit = Column(Text, nullable=True)
+    missing_data_notes = Column(JSON, nullable=True)
     market_value_projection = Column(Text, nullable=True)
-    summary = Column(Text, nullable=True)
-    recommendation = Column(Text, nullable=True)
 
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(

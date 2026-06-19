@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link, useParams } from "react-router-dom";
 import {
   LineChart,
@@ -121,12 +122,74 @@ const POSITION_GROUP_LABELS = {
   STRIKER: "Striker View",
 };
 
+const TRANSFER_SCENARIO_SUB_SCORE_LABELS = [
+  ["player_quality_score", "Player Quality"],
+  ["squad_fit_score", "Squad Fit"],
+  ["financial_fit_score", "Financial Fit"],
+  ["performance_score", "Performance"],
+  ["advanced_stats_score", "Advanced Stats"],
+  ["age_profile_score", "Age Profile"],
+  ["contract_score", "Contract"],
+  ["culture_fit_score", "Culture Fit"],
+  ["pressure_readiness_score", "Pressure"],
+  ["transfer_risk_score", "Transfer Risk"],
+];
+
 const normalizePositionText = (position) =>
   String(position || "")
     .toLowerCase()
     .replace(/[-_/]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+const normalizeClubName = (clubName) => {
+  const normalized = String(clubName || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  const ignoredTokens = new Set([
+    "fc",
+    "cf",
+    "afc",
+    "club",
+    "football",
+    "futbol",
+    "the",
+  ]);
+
+  return normalized
+    .split(/\s+/)
+    .filter((token) => token && !ignoredTokens.has(token))
+    .join(" ")
+    .trim();
+};
+
+const getScenarioErrorMessage = (detail, fallbackMessage) => {
+  const rawMessage = Array.isArray(detail)
+    ? detail.map((item) => item?.msg || item).join(" ")
+    : String(detail || fallbackMessage || "");
+  const normalizedMessage = rawMessage.toLowerCase();
+
+  if (normalizedMessage.includes("already at this club")) {
+    return "Player is already at this club.";
+  }
+
+  if (normalizedMessage.includes("target club is required")) {
+    return "Please enter a target club.";
+  }
+
+  if (normalizedMessage.includes("target club not found")) {
+    return "Target club not found.";
+  }
+
+  if (normalizedMessage.includes("player not found")) {
+    return "Player not found.";
+  }
+
+  return rawMessage || fallbackMessage || "Transfer scenario analysis failed.";
+};
 
 const getPositionGroup = (position) => {
   const normalized = normalizePositionText(position);
@@ -218,7 +281,7 @@ function PlayerPage() {
   const [score, setScore] = useState(null);
   const [aiReport, setAiReport] = useState(null);
   const [loadingAi, setLoadingAi] = useState(false);
-  const [scenarioModalOpen, setScenarioModalOpen] = useState(false);
+  const [isScenarioModalOpen, setIsScenarioModalOpen] = useState(false);
   const [scenarioTargetClub, setScenarioTargetClub] = useState("");
   const [selectedScenarioClub, setSelectedScenarioClub] = useState(null);
   const [clubSuggestions, setClubSuggestions] = useState([]);
@@ -240,11 +303,62 @@ function PlayerPage() {
   const [advancedStats, setAdvancedStats] = useState(null);
   const [advancedStatsLoading, setAdvancedStatsLoading] = useState(true);
   const [clubInfo, setClubInfo] = useState(null);
+  const currentScenarioClubNames = [
+    player?.club,
+    clubInfo?.club_name,
+  ].filter(Boolean);
+  const currentScenarioClubIds = [
+    player?.club_id,
+    player?.current_club_id,
+  ]
+    .filter((value) => value !== null && value !== undefined)
+    .map((value) => String(value));
+  const normalizedCurrentScenarioClubNames = currentScenarioClubNames
+    .map(normalizeClubName)
+    .filter(Boolean);
+  const isCurrentScenarioClubName = (clubName) => {
+    const normalizedClubName = normalizeClubName(clubName);
+
+    return (
+      normalizedClubName &&
+      normalizedCurrentScenarioClubNames.includes(normalizedClubName)
+    );
+  };
+  const isCurrentScenarioClubOption = (club) => {
+    if (!club) {
+      return false;
+    }
+
+    return (
+      currentScenarioClubIds.includes(String(club.club_id)) ||
+      isCurrentScenarioClubName(club.club_name)
+    );
+  };
+  const dedupeScenarioClubs = (clubs) => {
+    const seen = new Set();
+
+    return (Array.isArray(clubs) ? clubs : []).filter((club) => {
+      if (isCurrentScenarioClubOption(club)) {
+        return false;
+      }
+
+      const key = club.club_id
+        ? `id:${club.club_id}`
+        : `name:${normalizeClubName(club.club_name)}`;
+
+      if (!key || seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+      return true;
+    });
+  };
 
   useEffect(() => {
     const searchTerm = scenarioTargetClub.trim();
 
-    if (!scenarioModalOpen || selectedScenarioClub || searchTerm.length < 2) {
+    if (!isScenarioModalOpen || selectedScenarioClub || searchTerm.length < 2) {
       setClubSuggestions([]);
       setClubSuggestionsLoading(false);
       return;
@@ -265,9 +379,8 @@ function PlayerPage() {
         }
 
         const data = await response.json();
-        setClubSuggestions(data || []);
-      } catch (error) {
-        console.error(error);
+        setClubSuggestions(dedupeScenarioClubs(data));
+      } catch {
         setClubSuggestions([]);
       } finally {
         setClubSuggestionsLoading(false);
@@ -275,7 +388,38 @@ function PlayerPage() {
     }, 250);
 
     return () => window.clearTimeout(timeoutId);
-  }, [scenarioModalOpen, scenarioTargetClub, selectedScenarioClub]);
+  }, [
+    isScenarioModalOpen,
+    scenarioTargetClub,
+    selectedScenarioClub,
+    player?.club,
+    player?.club_id,
+    player?.current_club_id,
+    clubInfo?.club_name,
+  ]);
+
+  useEffect(() => {
+    if (!isScenarioModalOpen || typeof document === "undefined") {
+      return undefined;
+    }
+
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape" && !scenarioLoading && !scenarioAiLoading) {
+        setIsScenarioModalOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = "";
+      document.documentElement.style.overflow = "";
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isScenarioModalOpen, scenarioLoading, scenarioAiLoading]);
 
   useEffect(() => {
     setClubInfo(null);
@@ -490,6 +634,42 @@ function PlayerPage() {
     return formattedValue === "-" ? "-" : `${formattedValue}%`;
   };
 
+  const getScoreBarWidth = (value) => {
+    const numberValue = Number(value);
+
+    if (!Number.isFinite(numberValue)) {
+      return "0%";
+    }
+
+    return `${Math.min(100, Math.max(0, numberValue))}%`;
+  };
+
+  const getScoreBarClass = (value) => {
+    const numberValue = Number(value);
+
+    if (!Number.isFinite(numberValue)) {
+      return "bg-zinc-700";
+    }
+
+    if (numberValue >= 85) return "bg-green-400";
+    if (numberValue >= 70) return "bg-cyan-300";
+    if (numberValue >= 55) return "bg-yellow-300";
+    return "bg-red-400";
+  };
+
+  const getScoreTextClass = (value) => {
+    const numberValue = Number(value);
+
+    if (!Number.isFinite(numberValue)) {
+      return "text-cyan-300";
+    }
+
+    if (numberValue >= 85) return "score-high";
+    if (numberValue >= 70) return "score-medium";
+    if (numberValue >= 55) return "score-warning";
+    return "score-risk";
+  };
+
   const formatEuroRaw = (value) => {
     if (value === null || value === undefined || value === 0) {
       return "-";
@@ -625,27 +805,27 @@ function PlayerPage() {
     if (value >= 86) {
       return {
         label: "ELITE PLAYER",
-        className: "bg-green-500/20 text-green-400",
+        className: "scout-badge scout-badge-success",
       };
     }
 
     if (value >= 76) {
       return {
         label: "HIGH QUALITY",
-        className: "bg-cyan-500/20 text-cyan-300",
+        className: "scout-badge scout-badge-cyan",
       };
     }
 
     if (value >= 66) {
       return {
         label: "STRONG PROSPECT",
-        className: "bg-yellow-500/20 text-yellow-300",
+        className: "scout-badge scout-badge-warning",
       };
     }
 
     return {
       label: "DEVELOPING",
-      className: "bg-red-500/20 text-red-400",
+      className: "scout-badge scout-badge-danger",
     };
   };
 
@@ -730,16 +910,12 @@ function PlayerPage() {
   };
 
   const openTransferScenarioModal = () => {
-    setScenarioModalOpen(true);
+    setIsScenarioModalOpen(true);
     setScenarioError("");
   };
 
   const closeTransferScenarioModal = () => {
-    if (scenarioLoading || scenarioAiLoading) {
-      return;
-    }
-
-    setScenarioModalOpen(false);
+    setIsScenarioModalOpen(false);
   };
 
   const analyzeTransferScenario = async (event) => {
@@ -753,6 +929,11 @@ function PlayerPage() {
 
     if (!targetClub) {
       setScenarioError("Please enter a target club.");
+      return;
+    }
+
+    if (isScenarioCurrentClubTarget) {
+      setScenarioError("Player is already at this club.");
       return;
     }
 
@@ -771,15 +952,20 @@ function PlayerPage() {
         },
       );
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(data.detail || "Transfer scenario analysis failed.");
+        throw new Error(
+          getScenarioErrorMessage(
+            data.detail,
+            "Transfer scenario analysis failed.",
+          ),
+        );
       }
 
       setScenarioResult(data);
+      setScenarioError("");
     } catch (error) {
-      console.error(error);
       setScenarioError(error.message || "Transfer scenario analysis failed.");
     } finally {
       setScenarioLoading(false);
@@ -799,6 +985,11 @@ function PlayerPage() {
       return;
     }
 
+    if (isScenarioCurrentClubTarget) {
+      setScenarioError("Player is already at this club.");
+      return;
+    }
+
     setScenarioAiLoading(true);
 
     try {
@@ -814,15 +1005,20 @@ function PlayerPage() {
         },
       );
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(data.detail || "AI transfer scenario analysis failed.");
+        throw new Error(
+          getScenarioErrorMessage(
+            data.detail,
+            "AI transfer scenario analysis failed.",
+          ),
+        );
       }
 
       setScenarioResult(data);
+      setScenarioError("");
     } catch (error) {
-      console.error(error);
       setScenarioError(
         error.message || "AI transfer scenario analysis failed.",
       );
@@ -833,7 +1029,7 @@ function PlayerPage() {
 
   if (!player) {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center text-2xl">
+      <div className="scout-theme flex min-h-screen items-center justify-center text-2xl text-white">
         Loading player...
       </div>
     );
@@ -1037,6 +1233,14 @@ function PlayerPage() {
     .filter(Boolean);
   const scenarioAnalysis =
     scenarioResult?.deterministic_analysis || scenarioResult;
+  const scenarioSubScores = scenarioAnalysis?.sub_scores || null;
+  const scenarioSubScoreItems = TRANSFER_SCENARIO_SUB_SCORE_LABELS.map(
+    ([key, label]) => ({
+      key,
+      label,
+      value: scenarioSubScores?.[key],
+    }),
+  );
   const scenarioClub =
     scenarioResult?.target_club_context ||
     scenarioResult?.scenario_context?.target_club_context ||
@@ -1045,10 +1249,75 @@ function PlayerPage() {
     scenarioClub?.club_name || selectedScenarioClub?.club_name || scenarioTargetClub;
   const scenarioClubLeague =
     scenarioClub?.league || selectedScenarioClub?.league || "";
+  const scenarioTargetClubName =
+    selectedScenarioClub?.club_name || scenarioTargetClub;
+  const isScenarioTargetClubEmpty = !scenarioTargetClubName.trim();
+  const isScenarioCurrentClubTarget =
+    Boolean(scenarioTargetClubName.trim()) &&
+    (isCurrentScenarioClubName(scenarioTargetClubName) ||
+      isCurrentScenarioClubOption(selectedScenarioClub));
+  const isScenarioAnalyzeDisabled =
+    scenarioLoading ||
+    scenarioAiLoading ||
+    isScenarioTargetClubEmpty ||
+    isScenarioCurrentClubTarget;
+  const isScenarioErrorWarning =
+    scenarioError &&
+    [
+      "Please enter a target club.",
+      "Player is already at this club.",
+      "Target club not found.",
+    ].includes(scenarioError);
+  const scenarioSourceBadge =
+    {
+      openai: {
+        label: "AI",
+        className: "border-cyan-400/30 bg-cyan-400/10 text-cyan-200",
+      },
+      cache: {
+        label: "Cached",
+        className: "border-emerald-400/30 bg-emerald-400/10 text-emerald-200",
+      },
+      fallback: {
+        label: "Fallback",
+        className: "border-amber-400/30 bg-amber-400/10 text-amber-200",
+      },
+    }[scenarioResult?.source] || null;
+  const scenarioReportItems = [
+    ["Recommendation", scenarioAnalysis?.recommendation],
+    ["Summary", scenarioAnalysis?.summary],
+    ["Tactical Fit", scenarioAnalysis?.tactical_fit],
+    ["Financial Risk", scenarioAnalysis?.financial_risk],
+    ["Contract Risk", scenarioAnalysis?.contract_risk],
+    [
+      "Squad Fit",
+      scenarioSubScores?.squad_fit_score !== null &&
+      scenarioSubScores?.squad_fit_score !== undefined
+        ? `${formatInteger(scenarioSubScores.squad_fit_score)} / 100`
+        : null,
+    ],
+    [
+      "Culture Fit",
+      scenarioSubScores?.culture_fit_score !== null &&
+      scenarioSubScores?.culture_fit_score !== undefined
+        ? `${formatInteger(scenarioSubScores.culture_fit_score)} / 100`
+        : null,
+    ],
+  ];
+  const scenarioMissingDataNotes = Array.from(new Set([
+    ...(Array.isArray(scenarioAnalysis?.missing_data_notes)
+      ? scenarioAnalysis.missing_data_notes
+      : []),
+    ...(Array.isArray(scenarioAnalysis?.risks)
+      ? scenarioAnalysis.risks.filter((item) =>
+          String(item).toLowerCase().includes("missing verified data"),
+        )
+      : []),
+  ]));
 
   return (
-    <div className="min-h-screen bg-black text-white overflow-hidden">
-      <div className="fixed inset-0 bg-gradient-to-br from-zinc-950 via-black to-black"></div>
+    <div className="scout-theme min-h-screen overflow-hidden text-white">
+      <div className="fixed inset-0 bg-gradient-to-br from-zinc-950 via-black to-black opacity-70"></div>
 
       <div className="relative z-10 max-w-7xl mx-auto px-6 py-10">
         <div className="flex items-center justify-between mb-10">
@@ -1059,7 +1328,7 @@ function PlayerPage() {
             ← Back to Scouting
           </Link>
 
-          <div className="px-4 py-2 rounded-full bg-cyan-500/20 text-cyan-300 text-sm font-semibold">
+          <div className="scout-badge scout-badge-cyan rounded-full px-4 py-2 text-sm font-semibold">
             AI SCOUT PROFILE
           </div>
         </div>
@@ -1118,7 +1387,7 @@ function PlayerPage() {
                   {scoutTags.map((tag) => (
                     <span
                       key={tag}
-                      className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-1 text-xs font-bold text-cyan-300"
+                      className="scout-badge scout-badge-cyan rounded-full px-3 py-1 text-xs font-bold"
                     >
                       {tag}
                     </span>
@@ -1129,22 +1398,22 @@ function PlayerPage() {
                   <button
                     onClick={analyzePlayerScore}
                     disabled={playerScoreLoading}
-                    className="rounded-2xl bg-white px-6 py-4 font-black text-black transition-all hover:bg-zinc-200 disabled:opacity-50"
+                    className="scout-secondary-button rounded-2xl px-6 py-4 font-black transition-all disabled:opacity-50"
                   >
                     {playerScoreLoading ? "Scoring..." : "Player Score"}
                   </button>
 
                   <button
                     onClick={openTransferScenarioModal}
-                    disabled={scenarioLoading}
-                    className="rounded-2xl bg-cyan-400 px-6 py-4 font-black text-black transition-all hover:bg-cyan-300 disabled:opacity-50"
+                    disabled={scenarioLoading || scenarioAiLoading}
+                    className="scout-primary-button rounded-2xl px-6 py-4 font-black transition-all disabled:opacity-50"
                   >
                     Transfer Scenario
                   </button>
 
                   <Link
                     to={`/compare?player1_id=${player.id}`}
-                    className="rounded-2xl bg-white/10 px-6 py-4 text-center font-black text-white transition-all hover:bg-white/15"
+                    className="scout-secondary-button rounded-2xl px-6 py-4 text-center font-black transition-all"
                   >
                     Compare Player
                   </Link>
@@ -1229,7 +1498,11 @@ function PlayerPage() {
                   Player Score
                 </p>
                 <div className="mt-2 flex items-end justify-between gap-4">
-                  <span className="text-5xl font-black text-cyan-300">
+                  <span
+                    className={`text-5xl font-black ${getScoreTextClass(
+                      playerScoreResult?.player_score,
+                    )}`}
+                  >
                     {playerScoreResult ? playerScoreResult.player_score : "--"}
                   </span>
                   <span className="pb-2 text-sm font-semibold text-zinc-400">
@@ -1684,7 +1957,11 @@ function PlayerPage() {
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                     <div className="rounded-2xl border border-white/5 bg-zinc-950/70 p-5">
                       <p className="text-sm text-zinc-400">Player Score</p>
-                      <p className="mt-2 text-4xl font-black text-cyan-300">
+                      <p
+                        className={`mt-2 text-4xl font-black ${getScoreTextClass(
+                          playerScoreResult.player_score,
+                        )}`}
+                      >
                         {playerScoreResult.player_score ?? "-"}
                       </p>
                     </div>
@@ -1744,15 +2021,31 @@ function PlayerPage() {
             </div>
           )}
 
-          {scenarioModalOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6 backdrop-blur-md">
-              <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-3xl border border-cyan-400/20 bg-zinc-950 p-6 shadow-2xl shadow-cyan-950/40">
-                <div className="mb-6 flex items-start justify-between gap-4">
+          {isScenarioModalOpen &&
+            createPortal(
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden px-3 py-5"
+            >
+              <div
+                className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+                onMouseDown={closeTransferScenarioModal}
+              />
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="transfer-scenario-title"
+                className="relative z-10 w-[92vw] max-w-[720px] overflow-visible rounded-2xl border border-cyan-400/20 bg-zinc-950/95 shadow-2xl shadow-black/60"
+                onMouseDown={(event) => event.stopPropagation()}
+              >
+                <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-5 py-4 sm:px-6">
                   <div>
                     <p className="text-xs font-bold uppercase text-cyan-300">
                       Transfer Scenario
                     </p>
-                    <h2 className="mt-2 text-3xl font-black">
+                    <h2
+                      id="transfer-scenario-title"
+                      className="mt-2 text-2xl font-black text-white sm:text-3xl"
+                    >
                       Analyze Target Club Fit
                     </h2>
                   </div>
@@ -1760,14 +2053,15 @@ function PlayerPage() {
                   <button
                     type="button"
                     onClick={closeTransferScenarioModal}
-                    disabled={scenarioLoading || scenarioAiLoading}
-                    className="rounded-full border border-white/10 bg-white/5 px-4 py-2 font-bold text-zinc-300 transition-colors hover:bg-white/10 disabled:opacity-50"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm font-black text-zinc-300 transition-colors hover:bg-white/10"
+                    aria-label="Close transfer scenario modal"
                   >
                     X
                   </button>
                 </div>
 
-                <form onSubmit={analyzeTransferScenario} className="space-y-4">
+                <div className="overflow-visible px-5 py-5 sm:px-6">
+                <form onSubmit={analyzeTransferScenario} className="space-y-4 rounded-2xl border border-white/10 bg-black/30 p-4">
                   <label className="block">
                     <span className="mb-2 block text-sm font-semibold text-zinc-300">
                       Target Club
@@ -1778,18 +2072,23 @@ function PlayerPage() {
                         onChange={(event) => {
                           setScenarioTargetClub(event.target.value);
                           setSelectedScenarioClub(null);
+                          setScenarioError("");
+                          setScenarioResult(null);
                         }}
                         placeholder="Barcelona, Arsenal, Manchester City..."
                         className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-4 text-white outline-none transition-colors placeholder:text-zinc-600 focus:border-cyan-400/60"
                       />
 
-                      {(clubSuggestionsLoading || clubSuggestions.length > 0) && (
-                        <div className="absolute left-0 right-0 top-full z-40 mt-2 overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl shadow-black/40">
+                      {(clubSuggestionsLoading ||
+                        clubSuggestions.length > 0 ||
+                        (scenarioTargetClub.trim().length >= 2 &&
+                          !selectedScenarioClub)) && (
+                        <div className="custom-scrollbar absolute left-0 right-0 top-full z-50 mt-2 max-h-[220px] overflow-y-auto rounded-xl border border-cyan-500/20 bg-[#050707] shadow-lg shadow-black/40">
                           {clubSuggestionsLoading ? (
                             <div className="px-4 py-3 text-sm text-zinc-400">
                               Searching clubs...
                             </div>
-                          ) : (
+                          ) : clubSuggestions.length > 0 ? (
                             clubSuggestions.map((club) => (
                               <button
                                 key={club.club_id}
@@ -1798,6 +2097,8 @@ function PlayerPage() {
                                   setSelectedScenarioClub(club);
                                   setScenarioTargetClub(club.club_name);
                                   setClubSuggestions([]);
+                                  setScenarioError("");
+                                  setScenarioResult(null);
                                 }}
                                 className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-white/5"
                               >
@@ -1820,162 +2121,243 @@ function PlayerPage() {
                                 </span>
                               </button>
                             ))
+                          ) : (
+                            <div className="px-4 py-3 text-sm text-zinc-500">
+                              No target club found
+                            </div>
                           )}
                         </div>
                       )}
                     </div>
+                    {isScenarioCurrentClubTarget && (
+                      <span className="mt-2 block text-sm font-semibold text-amber-300">
+                        Player is already at this club.
+                      </span>
+                    )}
                   </label>
 
                   <div className="flex flex-col gap-3 sm:flex-row">
                     <button
                       type="submit"
-                      disabled={scenarioLoading || scenarioAiLoading}
-                      className="rounded-2xl bg-cyan-400 px-6 py-4 font-black text-black transition-colors hover:bg-cyan-300 disabled:opacity-50"
+                      disabled={isScenarioAnalyzeDisabled}
+                      className="scout-primary-button flex flex-1 items-center justify-center gap-2 rounded-2xl px-6 py-4 font-black transition-colors disabled:opacity-50"
                     >
+                      {scenarioLoading && (
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-black/20 border-t-black" />
+                      )}
                       {scenarioLoading ? "Analyzing..." : "Analyze"}
                     </button>
                     <button
                       type="button"
                       onClick={analyzeTransferScenarioAi}
-                      disabled={scenarioLoading || scenarioAiLoading}
-                      className="rounded-2xl bg-white px-6 py-4 font-black text-black transition-colors hover:bg-zinc-200 disabled:opacity-50"
+                      disabled={isScenarioAnalyzeDisabled}
+                      className="scout-secondary-button flex flex-1 items-center justify-center gap-2 rounded-2xl px-6 py-4 font-black transition-colors disabled:opacity-50"
                     >
+                      {scenarioAiLoading && (
+                        <span className="h-4 w-4 animate-spin rounded-full border-2 border-cyan-200/20 border-t-cyan-200" />
+                      )}
                       {scenarioAiLoading ? "AI Analyzing..." : "AI Analyze"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={closeTransferScenarioModal}
-                      disabled={scenarioLoading || scenarioAiLoading}
-                      className="rounded-2xl bg-white/10 px-6 py-4 font-black text-white transition-colors hover:bg-white/15 disabled:opacity-50"
-                    >
-                      Cancel
                     </button>
                   </div>
                 </form>
 
                 {scenarioError && (
-                  <div className="mt-5 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200">
+                  <div
+                    className={`mt-5 rounded-2xl border px-4 py-3 text-sm font-semibold ${
+                      isScenarioErrorWarning
+                        ? "border-amber-400/20 bg-amber-500/10 text-amber-200"
+                        : "border-red-400/20 bg-red-500/10 text-red-200"
+                    }`}
+                  >
                     {scenarioError}
                   </div>
                 )}
 
+                {!scenarioResult && !scenarioLoading && !scenarioAiLoading && (
+                  <div className="mt-5 rounded-2xl border border-cyan-400/10 bg-cyan-400/5 px-4 py-4 text-sm text-zinc-400">
+                    Choose a target club to evaluate transfer fit.
+                  </div>
+                )}
+
+                {(scenarioLoading || scenarioAiLoading) && (
+                  <div className="mt-5 rounded-2xl border border-cyan-400/15 bg-black/30 p-5">
+                    <div className="flex items-center gap-3 text-sm font-semibold text-cyan-200">
+                      <span className="h-5 w-5 animate-spin rounded-full border-2 border-cyan-300/20 border-t-cyan-300" />
+                      Analyzing transfer fit...
+                    </div>
+                    <div className="mt-5 space-y-3">
+                      <div className="h-4 w-2/3 animate-pulse rounded-full bg-white/10" />
+                      <div className="h-4 w-full animate-pulse rounded-full bg-white/10" />
+                      <div className="h-4 w-4/5 animate-pulse rounded-full bg-white/10" />
+                    </div>
+                  </div>
+                )}
+
                 {scenarioResult && (
-                  <div className="mt-6 space-y-5">
+                  <div className="custom-scrollbar mt-6 max-h-[50vh] space-y-5 overflow-y-auto pr-1">
+                    <div className="rounded-2xl border border-cyan-400/15 bg-black/40 p-5">
+                      <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+                        <div className="flex shrink-0 flex-col items-center justify-center text-center">
+                          <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">
+                            Fit Score
+                          </p>
+                          <div
+                            className={`mt-3 flex h-28 w-28 items-center justify-center rounded-full border border-cyan-400/20 bg-cyan-400/10 text-5xl font-black ${getScoreTextClass(
+                              scenarioAnalysis?.fit_score,
+                            )}`}
+                          >
+                            {scenarioAnalysis?.fit_score ?? "-"}
+                          </div>
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-black uppercase tracking-wide text-zinc-200">
+                              {scenarioAnalysis?.grade || "-"}
+                            </span>
+                            {scenarioSourceBadge && (
+                              <span
+                                className={`rounded-full border px-3 py-1 text-xs font-black uppercase tracking-wide ${scenarioSourceBadge.className}`}
+                              >
+                                {scenarioSourceBadge.label}
+                              </span>
+                            )}
+                          </div>
+                          <h3 className="mt-3 truncate text-2xl font-black text-white">
+                            {scenarioClubName || "-"}
+                          </h3>
+                          <p className="mt-1 text-sm text-zinc-500">
+                            {scenarioClubLeague || "-"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
                     {scenarioResult.source === "fallback" && (
                       <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm font-semibold text-amber-200">
                         AI unavailable, deterministic fallback used.
                       </div>
                     )}
 
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    {scenarioSubScores && (
                       <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
-                        <p className="text-sm text-zinc-400">Fit Score</p>
-                        <p className="mt-2 text-4xl font-black text-cyan-300">
-                          {scenarioAnalysis?.fit_score ?? "-"}
+                        <p className="text-sm font-bold uppercase tracking-wide text-zinc-500">
+                          Sub Scores
                         </p>
-                      </div>
-                      <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
-                        <p className="text-sm text-zinc-400">Grade</p>
-                        <p className="mt-2 text-2xl font-black text-zinc-100">
-                          {scenarioAnalysis?.grade || "-"}
-                        </p>
-                      </div>
-                      <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
-                        <p className="text-sm text-zinc-400">Target Club</p>
-                        <p className="mt-2 text-lg font-black text-zinc-100">
-                          {scenarioClubName || "-"}
-                        </p>
-                        <p className="mt-1 text-sm text-zinc-500">
-                          {scenarioClubLeague || "-"}
-                        </p>
-                      </div>
-                    </div>
+                        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          {scenarioSubScoreItems.map(({ key, label, value }) => {
+                            const hasValue =
+                              value !== null &&
+                              value !== undefined &&
+                              value !== "";
 
-                    {(scenarioAnalysis?.recommendation ||
-                      scenarioAnalysis?.tactical_fit ||
-                      scenarioAnalysis?.financial_risk ||
-                      scenarioAnalysis?.contract_risk ||
-                      scenarioAnalysis?.market_value_projection) && (
-                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                        <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
-                          <p className="text-sm font-bold uppercase text-zinc-500">
-                            Recommendation
-                          </p>
-                          <p className="mt-2 leading-7 text-zinc-200">
-                            {scenarioAnalysis?.recommendation || "-"}
-                          </p>
-                        </div>
-                        <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
-                          <p className="text-sm font-bold uppercase text-zinc-500">
-                            Tactical Fit
-                          </p>
-                          <p className="mt-2 leading-7 text-zinc-200">
-                            {scenarioAnalysis?.tactical_fit || "-"}
-                          </p>
-                        </div>
-                        <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
-                          <p className="text-sm font-bold uppercase text-zinc-500">
-                            Financial Risk
-                          </p>
-                          <p className="mt-2 leading-7 text-zinc-200">
-                            {scenarioAnalysis?.financial_risk || "-"}
-                          </p>
-                        </div>
-                        <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
-                          <p className="text-sm font-bold uppercase text-zinc-500">
-                            Contract Risk
-                          </p>
-                          <p className="mt-2 leading-7 text-zinc-200">
-                            {scenarioAnalysis?.contract_risk || "-"}
-                          </p>
-                        </div>
-                        <div className="rounded-2xl border border-white/5 bg-black/40 p-5 md:col-span-2">
-                          <p className="text-sm font-bold uppercase text-zinc-500">
-                            Market Value Projection
-                          </p>
-                          <p className="mt-2 leading-7 text-zinc-200">
-                            {scenarioAnalysis?.market_value_projection || "-"}
-                          </p>
+                            return (
+                              <div
+                                key={key}
+                                className="rounded-xl border border-white/5 bg-zinc-950/70 p-4"
+                              >
+                                <div className="mb-3 flex items-center justify-between gap-3">
+                                  <span className="text-sm font-semibold text-zinc-200">
+                                    {label}
+                                  </span>
+                                  <span
+                                    className={`text-sm font-black ${getScoreTextClass(
+                                      value,
+                                    )}`}
+                                  >
+                                    {hasValue ? formatInteger(value) : "-"}
+                                  </span>
+                                </div>
+                                <div className="h-2 overflow-hidden rounded-full bg-white/10">
+                                  <div
+                                    className={`h-full rounded-full ${getScoreBarClass(value)}`}
+                                    style={{
+                                      width: hasValue
+                                        ? getScoreBarWidth(value)
+                                        : "0%",
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
 
                     <div className="rounded-2xl border border-white/5 bg-black/40 p-5">
-                      <p className="mb-2 text-sm font-bold uppercase text-zinc-500">
-                        Summary
+                      <p className="text-sm font-bold uppercase tracking-wide text-zinc-500">
+                        AI Report
                       </p>
-                      <p className="leading-7 text-zinc-300">
-                        {scenarioAnalysis?.summary || "-"}
-                      </p>
+                      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                        {scenarioReportItems.map(([label, value]) => (
+                          <div
+                            key={label}
+                            className={`rounded-xl border border-white/5 bg-zinc-950/70 p-4 ${
+                              label === "Summary" ? "md:col-span-2" : ""
+                            }`}
+                          >
+                            <p className="text-xs font-bold uppercase tracking-wide text-zinc-500">
+                              {label}
+                            </p>
+                            <p className="mt-2 text-sm leading-6 text-zinc-200">
+                              {value || "-"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
                     </div>
 
-                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <div className="rounded-2xl border border-emerald-400/15 bg-emerald-500/5 p-5">
-                        <h3 className="mb-4 text-lg font-black text-emerald-300">
-                          Strengths
-                        </h3>
-                        <div className="space-y-3 text-sm text-zinc-300">
-                          {(scenarioAnalysis?.strengths || []).map((item) => (
+                    {scenarioMissingDataNotes.length > 0 && (
+                      <div className="rounded-2xl border border-amber-400/15 bg-amber-500/5 px-4 py-3 text-sm text-amber-100/80">
+                        <p className="font-bold uppercase tracking-wide text-amber-200">
+                          Missing Data Notes
+                        </p>
+                        <div className="mt-2 space-y-2">
+                          {scenarioMissingDataNotes.map((item) => (
                             <p key={item}>{item}</p>
                           ))}
                         </div>
                       </div>
+                    )}
 
-                      <div className="rounded-2xl border border-amber-400/15 bg-amber-500/5 p-5">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/5 p-5">
+                        <h3 className="mb-4 text-lg font-black text-emerald-300">
+                          Strengths
+                        </h3>
+                        <div className="space-y-3 text-sm text-zinc-300">
+                          {(scenarioAnalysis?.strengths || []).length > 0 ? (
+                            (scenarioAnalysis?.strengths || []).map((item) => (
+                              <p key={item}>{item}</p>
+                            ))
+                          ) : (
+                            <p>-</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-amber-400/20 bg-red-500/5 p-5">
                         <h3 className="mb-4 text-lg font-black text-amber-300">
                           Risks
                         </h3>
                         <div className="space-y-3 text-sm text-zinc-300">
-                          {(scenarioAnalysis?.risks || []).map((item) => (
-                            <p key={item}>{item}</p>
-                          ))}
+                          {(scenarioAnalysis?.risks || []).length > 0 ? (
+                            (scenarioAnalysis?.risks || []).map((item) => (
+                              <p key={item}>{item}</p>
+                            ))
+                          ) : (
+                            <p>-</p>
+                          )}
                         </div>
                       </div>
                     </div>
                   </div>
                 )}
+                </div>
               </div>
-            </div>
+            </div>,
+            document.body,
           )}
 
           {(score || loadingAi) && (

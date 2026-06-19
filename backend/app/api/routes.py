@@ -20,6 +20,7 @@ from app.models.player_valuation_db import PlayerValuationDB
 from app.models.player_transfer_db import PlayerTransferDB
 from app.models.club_db import ClubDB
 from app.schemas.player_valuation import PlayerValuationResponse, PlayerValuationItem
+from app.services.club_context import build_club_context, resolve_club
 from app.services.player_context import build_player_context
 from app.services.player_score import analyze_player_score
 from app.services.transfer_scenario_analyzer import build_transfer_scenario_context
@@ -97,6 +98,67 @@ def normalized_column(column):
         ACCENT_FROM,
         ACCENT_TO,
     )
+
+
+def normalize_club_name_for_compare(value):
+    normalized = normalize_search_query(str(value or ""))
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    ignored_tokens = {"fc", "cf", "afc", "club", "football", "futbol", "the"}
+    tokens = [
+        token
+        for token in normalized.split()
+        if token and token not in ignored_tokens
+    ]
+    return " ".join(tokens).strip()
+
+
+def validate_transfer_target_club(db: Session, player_id: int, target_club: str):
+    player = db.query(PlayerDB).filter(PlayerDB.id == player_id).first()
+
+    if not player:
+        return None
+
+    current_club = get_player_club(db, player)
+    target_club_record = resolve_club(db, target_club)
+
+    if (
+        current_club
+        and target_club_record
+        and current_club.club_id == target_club_record.club_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Player is already at this club.",
+        )
+
+    current_names = [
+        player.club,
+        current_club.name if current_club else None,
+        current_club.club_code if current_club else None,
+    ]
+    target_names = [
+        target_club,
+        target_club_record.name if target_club_record else None,
+        target_club_record.club_code if target_club_record else None,
+    ]
+    current_normalized = {
+        normalize_club_name_for_compare(name)
+        for name in current_names
+        if normalize_club_name_for_compare(name)
+    }
+    target_normalized = {
+        normalize_club_name_for_compare(name)
+        for name in target_names
+        if normalize_club_name_for_compare(name)
+    }
+
+    if current_normalized.intersection(target_normalized):
+        raise HTTPException(
+            status_code=400,
+            detail="Player is already at this club.",
+        )
+
+    return player
 
 
 def get_club_by_id_map(db: Session, club_ids):
@@ -183,6 +245,20 @@ def serialize_player_detail(player, club=None):
     }
 
 
+def get_clean_distinct_values(db: Session, column):
+    rows = (
+        db.query(column)
+        .filter(column.isnot(None))
+        .filter(func.trim(column) != "")
+        .filter(column != "-")
+        .filter(column != "Unknown")
+        .distinct()
+        .order_by(column.asc())
+        .all()
+    )
+    return [row[0] for row in rows if row[0]]
+
+
 def serialize_advanced_stats(player_id, stats=None, season="2024/25"):
     return {
         "player_id": player_id,
@@ -244,12 +320,19 @@ def analyze_transfer_scenario_endpoint(
     request: TransferScenarioRequest,
     db: Session = Depends(get_db),
 ):
-    if not request.target_club.strip():
+    target_club = request.target_club.strip()
+
+    if not target_club:
         raise HTTPException(status_code=400, detail="Target club is required")
+
+    player = validate_transfer_target_club(db, request.player_id, target_club)
+
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
 
     result = build_transfer_scenario_context(
         request.player_id,
-        request.target_club.strip(),
+        target_club,
         db,
     )
 
@@ -267,12 +350,19 @@ def prepare_transfer_scenario_ai_analyze(
     request: TransferScenarioRequest,
     db: Session = Depends(get_db),
 ):
-    if not request.target_club.strip():
+    target_club = request.target_club.strip()
+
+    if not target_club:
         raise HTTPException(status_code=400, detail="Target club is required")
+
+    player = validate_transfer_target_club(db, request.player_id, target_club)
+
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
 
     result = analyze_transfer_scenario_with_ai(
         request.player_id,
-        request.target_club.strip(),
+        target_club,
         db,
     )
 
@@ -309,9 +399,15 @@ def search_players(
     position: str | None = None,
     league: str | None = None,
     nationality: str | None = None,
+    club: str | None = None,
+    preferred_foot: str | None = None,
     min_age: int | None = None,
     max_age: int | None = None,
+    min_value: float | None = None,
     max_value: float | None = None,
+    min_minutes: int | None = None,
+    min_goals: int | None = None,
+    min_assists: int | None = None,
     max_salary: float | None = None,
     page: int = 1,
     limit: int = 50,
@@ -349,14 +445,32 @@ def search_players(
     if nationality:
         query = query.filter(PlayerDB.nationality.ilike(f"%{nationality}%"))
 
+    if club:
+        query = query.filter(PlayerDB.club.ilike(f"%{club}%"))
+
+    if preferred_foot:
+        query = query.filter(PlayerDB.preferred_foot.ilike(preferred_foot))
+
     if min_age is not None:
         query = query.filter(PlayerDB.age >= min_age)
 
     if max_age is not None:
         query = query.filter(PlayerDB.age <= max_age)
 
+    if min_value is not None:
+        query = query.filter(PlayerDB.market_value_m >= min_value)
+
     if max_value is not None:
         query = query.filter(PlayerDB.market_value_m <= max_value)
+
+    if min_minutes is not None:
+        query = query.filter(PlayerDB.minutes_played >= min_minutes)
+
+    if min_goals is not None:
+        query = query.filter(PlayerDB.goals >= min_goals)
+
+    if min_assists is not None:
+        query = query.filter(PlayerDB.assists >= min_assists)
 
     if max_salary is not None:
         query = query.filter(PlayerDB.salary_m <= max_salary)
@@ -400,9 +514,15 @@ def search_players(
             position,
             league,
             nationality,
+            club,
+            preferred_foot,
             min_age,
             max_age,
+            min_value,
             max_value,
+            min_minutes,
+            min_goals,
+            min_assists,
             max_salary,
         ]
     )
@@ -434,6 +554,25 @@ def search_players(
         "players": [
             serialize_player_detail(player, club_map.get(player.current_club_id))
             for player in players
+        ],
+    }
+
+
+@router.get("/players/filter-options")
+def get_player_filter_options(db: Session = Depends(get_db)):
+    leagues = get_clean_distinct_values(db, PlayerDB.league)
+
+    return {
+        "positions": get_clean_distinct_values(db, PlayerDB.position),
+        "nationalities": get_clean_distinct_values(db, PlayerDB.nationality),
+        "clubs": get_clean_distinct_values(db, PlayerDB.club),
+        "preferred_feet": get_clean_distinct_values(db, PlayerDB.preferred_foot),
+        "leagues": [
+            {
+                "value": league,
+                "label": formatLeagueName(league),
+            }
+            for league in leagues
         ],
     }
 
@@ -520,6 +659,19 @@ def search_clubs(
         }
         for club in clubs
     ]
+
+
+@router.get("/clubs/{club_name}/context")
+def get_club_ai_context(
+    club_name: str,
+    db: Session = Depends(get_db),
+):
+    context = build_club_context(club_name, db)
+
+    if not context:
+        raise HTTPException(status_code=404, detail="Club not found")
+
+    return context
 
 
 @router.get("/clubs/{club_id_or_name}")

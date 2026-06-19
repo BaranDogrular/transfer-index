@@ -43,7 +43,7 @@ export default function Home() {
   }, [query]);
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-black text-white">
+    <div className="scout-theme relative min-h-screen overflow-hidden text-white">
       {/* VIDEO */}
       <video
         autoPlay
@@ -55,27 +55,31 @@ export default function Home() {
           absolute
           top-0
           left-0
+          z-0
           w-full
           h-full
           object-cover
-          brightness-110
+          brightness-75
+          saturate-125
         "
       >
         <source src="/videos/stadium-night.mp4" type="video/mp4" />
       </video>
 
       {/* OVERLAY */}
-      <div className="absolute inset-0 bg-black/45"></div>
+      <div className="absolute inset-0 z-[1] bg-[#020806]/55"></div>
+      <div className="pitch-line-overlay pointer-events-none absolute inset-0 z-[2] opacity-25"></div>
 
       {/* GRADIENT */}
       <div
         className="
         absolute
         inset-0
+        z-[3]
         bg-gradient-to-b
-        from-black/10
-        via-black/40
-        to-black/80
+        from-emerald-950/25
+        via-black/45
+        to-[#020806]/90
       "
       ></div>
 
@@ -86,7 +90,7 @@ export default function Home() {
         top-0
         left-0
         w-full
-        z-20
+        z-30
         px-6
         py-6
       "
@@ -129,7 +133,7 @@ export default function Home() {
             <Link
               to="/scouting"
               className="
-                hover:text-white
+                hover:text-cyan-300
                 transition-colors
               "
             >
@@ -138,7 +142,7 @@ export default function Home() {
 
             <button
               className="
-              hover:text-white
+              hover:text-cyan-300
               transition-colors
             "
             >
@@ -147,7 +151,7 @@ export default function Home() {
 
             <button
               className="
-              hover:text-white
+              hover:text-cyan-300
               transition-colors
             "
             >
@@ -161,7 +165,7 @@ export default function Home() {
       <div
         className="
         relative
-        z-10
+        z-20
         flex
         flex-col
         items-center
@@ -185,8 +189,8 @@ export default function Home() {
             px-4
             py-2
             rounded-full
-            bg-cyan-500/20
-            text-cyan-300
+            scout-badge
+            scout-badge-cyan
             text-sm
             font-semibold
             mb-8
@@ -208,7 +212,7 @@ export default function Home() {
           "
           >
             Transfer
-            <span className="text-cyan-400"> Index</span>
+            <span className="text-cyan-300"> Index</span>
           </h1>
 
           <p
@@ -282,7 +286,7 @@ export default function Home() {
                 left-0
                 mt-3
                 w-full
-                bg-black/80
+                bg-white/5
                 backdrop-blur-xl
                 border
                 border-white/10
@@ -339,7 +343,7 @@ export default function Home() {
 
                       <span
                         className="
-                        text-cyan-400
+                        text-cyan-300
                         text-sm
                         font-semibold
                       "
@@ -380,13 +384,10 @@ export default function Home() {
                 px-8
                 py-4
                 rounded-2xl
-                bg-cyan-400
-                hover:bg-cyan-300
-                text-black
+                scout-primary-button
                 font-black
                 transition-all
                 shadow-2xl
-                shadow-cyan-500/20
               "
             >
               Open Scouting Workspace
@@ -397,10 +398,7 @@ export default function Home() {
               px-8
               py-4
               rounded-2xl
-              border
-              border-white/20
-              bg-white/5
-              hover:bg-white/10
+              scout-secondary-button
               backdrop-blur-lg
               font-semibold
               transition-all
