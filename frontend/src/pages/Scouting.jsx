@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { formatClubDisplayName } from "../utils/display";
 
 const EMPTY_FILTER_OPTIONS = {
   positions: [],
@@ -179,32 +180,40 @@ export default function Scouting() {
   };
 
   const getRecommendation = (score) => {
-    if (score >= 85) {
+    if (score >= 90) {
       return {
-        label: "ELITE TARGET",
+        label: "Elite",
         color: "score-high",
         bg: "scout-badge scout-badge-success",
       };
     }
 
-    if (score >= 70) {
+    if (score >= 80) {
       return {
-        label: "STRONG OPTION",
+        label: "Strong Option",
         color: "score-medium",
         bg: "scout-badge scout-badge-cyan",
       };
     }
 
-    if (score >= 55) {
+    if (score >= 70) {
       return {
-        label: "MONITOR",
+        label: "Good Option",
+        color: "score-medium",
+        bg: "scout-badge scout-badge-cyan",
+      };
+    }
+
+    if (score >= 60) {
+      return {
+        label: "Monitor",
         color: "score-warning",
         bg: "scout-badge scout-badge-warning",
       };
     }
 
     return {
-      label: "HIGH RISK",
+      label: "Low Priority",
       color: "score-risk",
       bg: "scout-badge scout-badge-danger",
     };
@@ -322,6 +331,12 @@ export default function Scouting() {
 
   const filterControlClass =
     "h-12 w-full rounded-2xl border border-white/10 bg-black/40 px-4 text-white outline-none transition-colors placeholder:text-zinc-500 focus:border-cyan-400";
+  const clubFilterOptions = filterOptions.clubs
+    .map((club) => ({
+      value: club,
+      label: formatClubDisplayName(club),
+    }))
+    .filter((option) => option.label !== "-");
 
   const renderFilterLabel = (label) => (
     <span className="mb-2 block text-sm font-semibold text-zinc-300">
@@ -502,7 +517,7 @@ export default function Scouting() {
                               <span className="h-4 w-4 shrink-0 rounded-full border border-white/10 bg-white/5" />
                             )}
                             <span className="truncate">
-                              {player.club || "-"} · {player.position || "-"}
+                              {formatClubDisplayName(player.club)} / {player.position || "-"}
                             </span>
                           </div>
                         </div>
@@ -547,7 +562,7 @@ export default function Scouting() {
               "Club",
               clubFilter,
               setClubFilter,
-              filterOptions.clubs,
+              clubFilterOptions,
               "All clubs",
             )}
             {renderSelectFilter(
@@ -650,7 +665,9 @@ export default function Scouting() {
                         {player.age || "-"}
                       </td>
 
-                      <td className="px-6 py-5 text-zinc-300">{player.club}</td>
+                      <td className="px-6 py-5 text-zinc-300">
+                        {formatClubDisplayName(player.club)}
+                      </td>
 
                       <td className="px-6 py-5 text-zinc-300">
                         €{Number(player.market_value_m || 0).toFixed(2)}M

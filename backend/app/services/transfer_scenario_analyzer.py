@@ -1,9 +1,9 @@
 from app.models.player_transfer_db import PlayerTransferDB
-from app.services.club_context import build_club_context
+from app.services.club_context import build_club_context, resolve_club
+from app.services.club_intelligence import build_club_intelligence
 from app.services.player_context import (
     build_player_context,
     get_league_transition_risk,
-    language_groups_for_nationality,
     normalize_label,
 )
 
@@ -14,6 +14,46 @@ TOP_LEAGUES = {
     "Serie A",
     "Bundesliga",
     "Ligue 1",
+}
+
+COUNTRY_REGIONS = {
+    "england": "western_europe",
+    "scotland": "western_europe",
+    "spain": "western_europe",
+    "france": "western_europe",
+    "germany": "western_europe",
+    "italy": "western_europe",
+    "portugal": "western_europe",
+    "netherlands": "western_europe",
+    "belgium": "western_europe",
+    "austria": "western_europe",
+    "switzerland": "western_europe",
+    "turkey": "southern_europe",
+    "türkiye": "southern_europe",
+    "greece": "southern_europe",
+    "croatia": "southern_europe",
+    "serbia": "southern_europe",
+    "brazil": "south_america",
+    "argentina": "south_america",
+    "uruguay": "south_america",
+    "colombia": "south_america",
+    "chile": "south_america",
+    "paraguay": "south_america",
+    "ecuador": "south_america",
+    "mexico": "north_america",
+    "united states": "north_america",
+    "usa": "north_america",
+    "canada": "north_america",
+    "morocco": "africa",
+    "senegal": "africa",
+    "nigeria": "africa",
+    "ghana": "africa",
+    "ivory coast": "africa",
+    "egypt": "africa",
+    "japan": "asia",
+    "south korea": "asia",
+    "korea": "asia",
+    "australia": "oceania",
 }
 
 EXPECTED_AI_RESPONSE_SCHEMA = {
@@ -31,16 +71,16 @@ EXPECTED_AI_RESPONSE_SCHEMA = {
 }
 
 SUB_SCORE_WEIGHTS = {
-    "player_quality_score": 0.20,
-    "squad_fit_score": 0.15,
-    "financial_fit_score": 0.15,
+    "player_quality_score": 0.18,
     "performance_score": 0.15,
-    "advanced_stats_score": 0.10,
-    "age_profile_score": 0.08,
-    "contract_score": 0.07,
+    "advanced_stats_score": 0.12,
+    "squad_fit_score": 0.12,
+    "financial_fit_score": 0.10,
+    "age_profile_score": 0.10,
+    "contract_score": 0.08,
     "culture_fit_score": 0.05,
-    "pressure_readiness_score": 0.03,
-    "transfer_risk_score": 0.02,
+    "pressure_readiness_score": 0.05,
+    "transfer_risk_score": 0.05,
 }
 
 
@@ -91,6 +131,54 @@ def normalize_position(position):
         return "central_midfielder"
 
     return value.strip() or "unknown"
+
+
+def normalize_country(value):
+    normalized = normalize_label(value)
+
+    if normalized == "usa":
+        return "united states"
+    if normalized == "turkiye":
+        return "turkey"
+
+    return normalized
+
+
+def country_region(value):
+    return COUNTRY_REGIONS.get(normalize_country(value))
+
+
+def league_level_from_name(league):
+    if league in TOP_LEAGUES:
+        return "top"
+    if league:
+        return "mid"
+
+    return "unknown"
+
+
+def level_rank(level):
+    return {
+        "elite": 4,
+        "top": 3,
+        "mid": 2,
+        "developing": 1,
+        "unknown": 0,
+    }.get(level or "unknown", 0)
+
+
+def get_source_club_level(player_context):
+    current_league = (
+        player_context.get("club", {}).get("league")
+        or player_context.get("profile", {}).get("league")
+    )
+
+    if current_league in TOP_LEAGUES:
+        return "top"
+    if current_league:
+        return "mid"
+
+    return "unknown"
 
 
 def get_transfer_items(player_context):
@@ -324,54 +412,140 @@ def get_previous_teammates_from_transfer_history(player_context, club_context, d
     }
 
 
-def calculate_culture_fit(player_context, club_context, db):
-    player_nationality = player_context.get("profile", {}).get("nationality")
-    player_language_groups = language_groups_for_nationality(player_nationality)
+def get_squad_majority_nationality(club_context):
     target_players = flatten_club_players(club_context)
-    same_nationality_count = sum(
-        1
-        for player in target_players
-        if normalize_label(player.get("nationality"))
-        and normalize_label(player.get("nationality"))
-        == normalize_label(player_nationality)
-    )
-    same_language_count = None
 
-    if player_language_groups:
-        same_language_count = sum(
-            1
-            for player in target_players
-            if player_language_groups.intersection(
-                language_groups_for_nationality(player.get("nationality"))
+    if not target_players:
+        return None
+
+    nationality_counts = {}
+
+    for player in target_players:
+        nationality = normalize_country(player.get("nationality"))
+
+        if not nationality:
+            continue
+
+        nationality_counts[nationality] = nationality_counts.get(nationality, 0) + 1
+
+    if not nationality_counts:
+        return None
+
+    majority_nationality, majority_count = max(
+        nationality_counts.items(),
+        key=lambda item: item[1],
+    )
+
+    if majority_count < 2:
+        return None
+
+    return majority_nationality
+
+
+def has_previous_country_experience(player_context, target_country, db):
+    if not db or not target_country:
+        return False
+
+    target_country = normalize_country(target_country)
+
+    for transfer in get_transfer_items(player_context):
+        for club_name in [transfer.get("from_club"), transfer.get("to_club")]:
+            if not club_name:
+                continue
+
+            club = resolve_club(db, club_name)
+
+            if club and normalize_country(club.country) == target_country:
+                return True
+
+    return False
+
+
+def build_culture_fit_signals(player_context, club_context, db=None):
+    player_nationality = normalize_country(
+        player_context.get("profile", {}).get("nationality")
+    )
+    source_country = normalize_country(player_context.get("club", {}).get("country"))
+    target_country = normalize_country(club_context.get("country"))
+    player_league = (
+        player_context.get("club", {}).get("league")
+        or player_context.get("profile", {}).get("league")
+    )
+    target_league = club_context.get("league")
+    source_region = country_region(source_country or player_nationality)
+    target_region = country_region(target_country)
+    squad_majority_nationality = get_squad_majority_nationality(club_context)
+
+    return {
+        "same_country": bool(
+            target_country
+            and (
+                source_country == target_country
+                or player_nationality == target_country
             )
-        )
+        ),
+        "same_league": bool(player_league and target_league and player_league == target_league),
+        "same_region": bool(
+            source_region and target_region and source_region == target_region
+        ),
+        "same_nationality_as_squad_majority": bool(
+            player_nationality
+            and squad_majority_nationality
+            and player_nationality == squad_majority_nationality
+        ),
+        "previous_same_country_experience": has_previous_country_experience(
+            player_context,
+            target_country,
+            db,
+        ),
+        "squad_majority_nationality": squad_majority_nationality,
+    }
 
-    previous_teammates = get_previous_teammates_from_transfer_history(
-        player_context,
-        club_context,
-        db,
-    )
-    previous_teammate_count = previous_teammates.get("count", 0)
 
-    if (
-        same_nationality_count >= 2
-        or (same_language_count is not None and same_language_count >= 4)
-        or previous_teammate_count >= 1
-    ):
+def score_culture_signals(signals):
+    if not signals:
+        return 50
+
+    score = 50
+
+    if signals.get("same_country"):
+        score += 15
+    if signals.get("same_league"):
+        score += 12
+    if signals.get("same_region"):
+        score += 8
+    if signals.get("same_nationality_as_squad_majority"):
+        score += 10
+    if signals.get("previous_same_country_experience"):
+        score += 10
+
+    return clamp_score(score)
+
+
+def calculate_culture_fit(player_context, club_context, db):
+    signals = build_culture_fit_signals(player_context, club_context, db)
+    score = score_culture_signals(signals)
+
+    if score >= 70:
         culture_fit = "High"
-    elif same_nationality_count >= 1 or (
-        same_language_count is not None and same_language_count >= 2
-    ):
+    elif score >= 58:
         culture_fit = "Medium"
     else:
         culture_fit = "Low"
 
     return {
-        "same_nationality_teammates_count": same_nationality_count,
-        "same_language_approximation_count": same_language_count,
-        "same_language_method": "nationality mapping only",
-        "previous_teammates": previous_teammates,
+        "same_country": signals["same_country"],
+        "same_league": signals["same_league"],
+        "same_region": signals["same_region"],
+        "same_nationality_as_squad_majority": signals[
+            "same_nationality_as_squad_majority"
+        ],
+        "previous_same_country_experience": signals[
+            "previous_same_country_experience"
+        ],
+        "squad_majority_nationality": signals["squad_majority_nationality"],
         "culture_fit": culture_fit,
+        "culture_fit_score": score,
     }
 
 
@@ -469,6 +643,116 @@ def first_available(*values):
     return None
 
 
+def has_number(value):
+    return to_float(value) is not None
+
+
+def get_advanced_stats(player_context):
+    return player_context.get("advanced_stats_24_25") or {}
+
+
+def get_advanced_stat(player_context, *keys):
+    advanced_stats = get_advanced_stats(player_context)
+
+    for key in keys:
+        value = to_float(advanced_stats.get(key))
+
+        if value is not None:
+            return value
+
+    return None
+
+
+def get_position_group_from_context(player_context):
+    return normalize_position(player_context.get("profile", {}).get("position"))
+
+
+def is_attacker_group(position_group):
+    return position_group in {"winger", "striker", "attacking_midfielder"}
+
+
+def is_midfielder_group(position_group):
+    return position_group in {
+        "central_midfielder",
+        "defensive_midfielder",
+        "attacking_midfielder",
+    }
+
+
+def is_defender_group(position_group):
+    return position_group in {
+        "centre_back",
+        "full_back",
+        "left_back",
+        "right_back",
+    }
+
+
+def metric_component(value, elite_value, weight):
+    number_value = to_float(value)
+
+    if number_value is None or elite_value <= 0:
+        return 0
+
+    return min(max(number_value, 0) / elite_value, 1) * weight
+
+
+def normalize_percentage(value):
+    number_value = to_float(value)
+
+    if number_value is None:
+        return None
+
+    if number_value <= 1:
+        return number_value * 100
+
+    return number_value
+
+
+def get_club_intelligence_context(club_context):
+    return (
+        club_context.get("club_intelligence")
+        or build_club_intelligence(club_context)
+        or {}
+    )
+
+
+def position_need_tokens(position):
+    position_group = normalize_position(position)
+
+    if position_group == "goalkeeper":
+        return {"GK"}
+    if position_group == "centre_back":
+        return {"CB"}
+    if position_group == "left_back":
+        return {"LB"}
+    if position_group == "right_back":
+        return {"RB"}
+    if position_group == "full_back":
+        return {"LB", "RB"}
+    if position_group == "defensive_midfielder":
+        return {"DM", "CM"}
+    if position_group in {"central_midfielder", "attacking_midfielder"}:
+        return {"CM"}
+    if position_group == "winger":
+        return {"Winger", "RW", "LW"}
+    if position_group == "striker":
+        return {"ST", "CF"}
+
+    return set()
+
+
+def count_position_distribution_depth(position_distribution, position):
+    target_group = normalize_position(position)
+    count = 0
+
+    for source_position, source_count in (position_distribution or {}).items():
+        if normalize_position(source_position) == target_group:
+            count += int(source_count or 0)
+
+    return count
+
+
 def get_player_market_value_m(player_context):
     return market_value_to_millions(
         player_context.get("market", {}).get("current_market_value")
@@ -497,24 +781,16 @@ def score_market_value_signal(player_context):
 
 def score_player_quality(player_context):
     profile = player_context.get("profile") or {}
-    derived = player_context.get("derived_scout_metrics") or {}
-    component_values = [
-        score_market_value_signal(player_context),
-        score_age_profile(player_context),
-        score_performance_subscore(player_context),
-        derived.get("experience_score"),
-    ]
-    available_values = [
-        value
-        for value in component_values
-        if value is not None
-    ]
-
-    if not available_values:
-        return None
-
-    score = sum(available_values) / len(available_values)
-
+    market_score = score_market_value_signal(player_context)
+    age_score = score_age_profile(player_context)
+    performance_score = score_performance_subscore(player_context)
+    advanced_score = score_advanced_stats_subscore(player_context)
+    score = (
+        (market_score if market_score is not None else 50) * 0.35
+        + (age_score if age_score is not None else 50) * 0.20
+        + (performance_score if performance_score is not None else 50) * 0.25
+        + (advanced_score if advanced_score is not None else 50) * 0.20
+    )
     age = to_float(profile.get("age"))
 
     if age is not None and age <= 22:
@@ -525,31 +801,91 @@ def score_player_quality(player_context):
 
 def score_squad_fit_subscore(player_context, club_context):
     position = player_context.get("profile", {}).get("position")
-    players_by_position = club_context.get("current_players_by_position") or {}
+    club_intelligence = get_club_intelligence_context(club_context)
+    position_depth = (
+        club_intelligence.get("position_depth")
+        or club_context.get("position_distribution")
+        or {}
+    )
+    needs = set(club_intelligence.get("needs") or [])
 
-    if not position or not players_by_position:
-        return None
+    if not position or not position_depth:
+        return 50
 
-    return calculate_squad_fit(player_context, club_context)["squad_fit_score"]
+    same_position_count = count_position_group(club_context, position)
+
+    if same_position_count == 0:
+        same_position_count = count_position_distribution_depth(
+            position_depth,
+            position,
+        )
+
+    need_match = bool(position_need_tokens(position).intersection(needs))
+
+    if need_match:
+        return clamp_score(88 if same_position_count <= 2 else 82)
+    if same_position_count <= 1:
+        return 78
+    if same_position_count <= 3:
+        return 60
+    if same_position_count <= 5:
+        return 45
+
+    return 38
 
 
 def score_financial_fit_subscore(player_context, club_context):
-    financial_fit = calculate_financial_fit(player_context, club_context)
-    fit_label = financial_fit.get("financial_fit")
+    player_value_m = get_player_market_value_m(player_context)
+    club_intelligence = get_club_intelligence_context(club_context)
+    budget_tier = club_intelligence.get("budget_tier")
+    club_level = club_intelligence.get("club_level")
 
-    return {
-        "Excellent": 92,
-        "Good": 76,
-        "Difficult": 48,
-        "Unrealistic": 25,
-    }.get(fit_label)
+    if player_value_m is None or not budget_tier or budget_tier == "unknown":
+        return 50
+
+    if player_value_m <= 5:
+        return 86 if budget_tier in {"low", "medium"} else 74
+
+    if budget_tier == "elite":
+        if player_value_m >= 100:
+            return 78
+        if player_value_m >= 50:
+            return 84
+        return 90
+
+    if budget_tier == "high":
+        if player_value_m >= 100:
+            return 58
+        if player_value_m >= 50:
+            return 70
+        if player_value_m >= 15:
+            return 84
+        return 88
+
+    if budget_tier == "medium":
+        if player_value_m >= 50:
+            return 35
+        if player_value_m >= 25:
+            return 55
+        if player_value_m >= 10:
+            return 78
+        return 86
+
+    if budget_tier == "low":
+        if player_value_m >= 25:
+            return 25
+        if player_value_m >= 10:
+            return 45
+        return 82
+
+    return 70 if club_level in {"elite", "top"} else 50
 
 
 def score_age_profile(player_context):
     age = to_float(player_context.get("profile", {}).get("age"))
 
     if age is None:
-        return None
+        return 50
     if 18 <= age <= 22:
         return 86
     if 23 <= age <= 27:
@@ -562,207 +898,385 @@ def score_age_profile(player_context):
     return 62
 
 
+def score_age_profile_subscore(player_context, club_context):
+    age = to_float(player_context.get("profile", {}).get("age"))
+    player_value_m = get_player_market_value_m(player_context)
+    club_intelligence = get_club_intelligence_context(club_context)
+    transfer_policy = club_intelligence.get("transfer_policy")
+    average_age = to_float(club_intelligence.get("average_age"))
+
+    if age is None:
+        return 50
+
+    if age >= 33:
+        score = 35
+    elif transfer_policy == "young_talent":
+        if age <= 23:
+            score = 88
+        elif age <= 26:
+            score = 66
+        else:
+            score = 48
+    elif transfer_policy == "prime_players":
+        if 24 <= age <= 29:
+            score = 88
+        elif age <= 23:
+            score = 68
+        elif age <= 32:
+            score = 62
+        else:
+            score = 38
+    elif transfer_policy == "value_opportunity":
+        if age <= 24 and (player_value_m is None or player_value_m <= 25):
+            score = 82
+        elif age <= 28 and (player_value_m is None or player_value_m <= 15):
+            score = 78
+        elif age <= 30:
+            score = 64
+        else:
+            score = 45
+    else:
+        if 24 <= age <= 29:
+            score = 82
+        elif age <= 23:
+            score = 76
+        elif age <= 32:
+            score = 60
+        else:
+            score = 40
+
+    if average_age is not None:
+        age_difference = abs(age - average_age)
+
+        if age_difference <= 2:
+            score += 5
+        elif age_difference >= 7:
+            score -= 8
+
+    return clamp_score(score)
+
+
 def score_contract_subscore(player_context):
     years_left = to_float(player_context.get("contract", {}).get("contract_years_left"))
 
     if years_left is None:
-        return None
+        return 50
     if years_left <= 1:
-        return 40
+        return 85
+    if years_left <= 2:
+        return 70
     if years_left <= 3:
-        return 65
+        return 55
 
-    return 82
+    return 40
 
 
 def score_performance_subscore(player_context):
     performance = player_context.get("performance_24_25") or {}
-    values = [
-        performance.get("matches"),
-        performance.get("starts"),
-        performance.get("minutes"),
-        performance.get("goals"),
-        performance.get("assists"),
-    ]
+    position_group = get_position_group_from_context(player_context)
+    minutes = to_float(performance.get("minutes"))
+    goals = to_float(performance.get("goals"))
+    assists = to_float(performance.get("assists"))
+    goals_per_90 = to_float(performance.get("goals_per_90"))
+    assists_per_90 = to_float(performance.get("assists_per_90"))
+    key_passes = get_advanced_stat(player_context, "key_passes")
+    progressive_passes = get_advanced_stat(player_context, "progressive_passes")
+    tackles = get_advanced_stat(player_context, "tackles")
+    interceptions = get_advanced_stat(player_context, "interceptions")
+    blocks = get_advanced_stat(player_context, "blocks")
+    clean_sheets = get_advanced_stat(player_context, "clean_sheets")
+    save_percentage = normalize_percentage(
+        get_advanced_stat(player_context, "save_percentage")
+    )
 
-    if all(value is None for value in values):
-        return None
+    if position_group == "goalkeeper":
+        if not any(has_number(value) for value in [minutes, clean_sheets, save_percentage]):
+            return 50
 
-    minutes = to_float(performance.get("minutes")) or 0
-    matches = to_float(performance.get("matches")) or 0
-    starts = to_float(performance.get("starts")) or 0
-    goals = to_float(performance.get("goals")) or 0
-    assists = to_float(performance.get("assists")) or 0
+        score = 40
+        score += metric_component(minutes, 3000, 25)
+        score += metric_component(clean_sheets, 16, 18)
+        score += metric_component(
+            max((save_percentage or 0) - 55, 0),
+            20,
+            17,
+        )
+        return clamp_score(score)
 
-    score = 35
-    score += min(minutes / 3000, 1) * 28
-    score += min(matches / 38, 1) * 14
-    score += min(starts / 32, 1) * 10
-    score += min((goals + assists) / 25, 1) * 13
+    if is_attacker_group(position_group):
+        if not any(
+            has_number(value)
+            for value in [minutes, goals, assists, goals_per_90, assists_per_90]
+        ):
+            return 50
+
+        score = 35
+        score += metric_component(minutes, 3000, 20)
+        score += metric_component(goals, 22, 20)
+        score += metric_component(assists, 14, 12)
+        score += metric_component(goals_per_90, 0.65, 8)
+        score += metric_component(assists_per_90, 0.38, 5)
+        return clamp_score(score)
+
+    if is_midfielder_group(position_group):
+        if not any(
+            has_number(value)
+            for value in [minutes, assists, key_passes, progressive_passes]
+        ):
+            return 50
+
+        score = 40
+        score += metric_component(minutes, 3000, 20)
+        score += metric_component(assists, 12, 14)
+        score += metric_component(key_passes, 60, 13)
+        score += metric_component(progressive_passes, 180, 13)
+        return clamp_score(score)
+
+    if is_defender_group(position_group):
+        if not any(
+            has_number(value)
+            for value in [minutes, tackles, interceptions, blocks]
+        ):
+            return 50
+
+        score = 40
+        score += metric_component(minutes, 3000, 22)
+        score += metric_component(tackles, 80, 13)
+        score += metric_component(interceptions, 60, 13)
+        score += metric_component(blocks, 60, 12)
+        return clamp_score(score)
+
+    if not any(has_number(value) for value in [minutes, goals, assists]):
+        return 50
+
+    goal_contribution_total = (goals or 0) + (assists or 0)
+    score = 40
+    score += metric_component(minutes, 3000, 25)
+    score += metric_component(goal_contribution_total, 20, 20)
     return clamp_score(score)
 
 
 def score_advanced_stats_subscore(player_context):
-    advanced_stats = player_context.get("advanced_stats_24_25")
+    advanced_stats = get_advanced_stats(player_context)
 
     if not advanced_stats:
-        return None
+        return 50
 
-    values = [
-        advanced_stats.get("xg"),
-        advanced_stats.get("xa"),
-        advanced_stats.get("npxg"),
-        advanced_stats.get("shots"),
-        advanced_stats.get("shots_on_target"),
-        advanced_stats.get("key_passes"),
-        advanced_stats.get("progressive_passes"),
-        advanced_stats.get("progressive_carries"),
-        advanced_stats.get("shot_creating_actions"),
-        advanced_stats.get("sca"),
-        advanced_stats.get("goal_creating_actions"),
-        advanced_stats.get("gca"),
-        advanced_stats.get("tackles"),
-        advanced_stats.get("interceptions"),
-        advanced_stats.get("blocks"),
-        advanced_stats.get("aerials_won"),
-    ]
-
-    if all(value is None for value in values):
-        return None
-
-    attacking = (
-        (to_float(advanced_stats.get("xg")) or 0)
-        + (to_float(advanced_stats.get("xa")) or 0)
-        + (to_float(advanced_stats.get("npxg")) or 0) * 0.5
+    position_group = get_position_group_from_context(player_context)
+    xg = get_advanced_stat(player_context, "xg")
+    xa = get_advanced_stat(player_context, "xa")
+    npxg = get_advanced_stat(player_context, "npxg")
+    sca = get_advanced_stat(player_context, "shot_creating_actions", "sca")
+    gca = get_advanced_stat(player_context, "goal_creating_actions", "gca")
+    progressive_carries = get_advanced_stat(player_context, "progressive_carries")
+    progressive_passes = get_advanced_stat(player_context, "progressive_passes")
+    key_passes = get_advanced_stat(player_context, "key_passes")
+    tackles = get_advanced_stat(player_context, "tackles")
+    interceptions = get_advanced_stat(player_context, "interceptions")
+    blocks = get_advanced_stat(player_context, "blocks")
+    aerials_won = get_advanced_stat(player_context, "aerials_won")
+    psxg = get_advanced_stat(player_context, "psxg", "post_shot_xg")
+    save_percentage = normalize_percentage(
+        get_advanced_stat(player_context, "save_percentage")
     )
-    creation = (
-        (to_float(advanced_stats.get("key_passes")) or 0) * 0.12
-        + (to_float(advanced_stats.get("progressive_passes")) or 0) * 0.06
-        + (to_float(advanced_stats.get("progressive_carries")) or 0) * 0.06
-        + (
-            to_float(
-                first_available(
-                    advanced_stats.get("shot_creating_actions"),
-                    advanced_stats.get("sca"),
-                )
-            )
-            or 0
-        )
-        * 0.05
-        + (
-            to_float(
-                first_available(
-                    advanced_stats.get("goal_creating_actions"),
-                    advanced_stats.get("gca"),
-                )
-            )
-            or 0
-        )
-        * 0.25
+    clean_sheets = get_advanced_stat(player_context, "clean_sheets")
+
+    if position_group == "goalkeeper":
+        if not any(has_number(value) for value in [psxg, save_percentage, clean_sheets]):
+            return 50
+
+        score = 42
+        score += metric_component(max((save_percentage or 0) - 55, 0), 20, 30)
+        score += metric_component(clean_sheets, 16, 18)
+        score += metric_component(psxg, 12, 10)
+        return clamp_score(score)
+
+    if is_attacker_group(position_group):
+        if not any(
+            has_number(value)
+            for value in [xg, xa, npxg, sca, gca, progressive_carries]
+        ):
+            return 50
+
+        score = 38
+        score += metric_component(xg, 18, 16)
+        score += metric_component(xa, 8, 10)
+        score += metric_component(npxg, 16, 12)
+        score += metric_component(sca, 100, 12)
+        score += metric_component(gca, 15, 7)
+        score += metric_component(progressive_carries, 120, 5)
+        return clamp_score(score)
+
+    if is_midfielder_group(position_group):
+        if not any(
+            has_number(value)
+            for value in [xa, progressive_passes, progressive_carries, key_passes, sca]
+        ):
+            return 50
+
+        score = 40
+        score += metric_component(xa, 8, 14)
+        score += metric_component(progressive_passes, 220, 16)
+        score += metric_component(progressive_carries, 90, 10)
+        score += metric_component(key_passes, 70, 12)
+        score += metric_component(sca, 100, 8)
+        return clamp_score(score)
+
+    if is_defender_group(position_group):
+        if not any(
+            has_number(value)
+            for value in [tackles, interceptions, blocks, aerials_won]
+        ):
+            return 50
+
+        score = 42
+        score += metric_component(tackles, 90, 17)
+        score += metric_component(interceptions, 70, 15)
+        score += metric_component(blocks, 70, 14)
+        score += metric_component(aerials_won, 90, 12)
+        return clamp_score(score)
+
+    if not any(has_number(value) for value in advanced_stats.values()):
+        return 50
+
+    return clamp_score(50)
+
+
+def score_culture_fit_subscore(player_context, club_context, db=None):
+    return score_culture_signals(
+        build_culture_fit_signals(player_context, club_context, db)
     )
-    defending = (
-        (to_float(advanced_stats.get("tackles")) or 0) * 0.08
-        + (to_float(advanced_stats.get("interceptions")) or 0) * 0.10
-        + (to_float(advanced_stats.get("blocks")) or 0) * 0.08
-        + (to_float(advanced_stats.get("aerials_won")) or 0) * 0.05
+
+
+def score_pressure_readiness_subscore(player_context, club_context):
+    club_intelligence = get_club_intelligence_context(club_context)
+    target_level = club_intelligence.get("club_level") or "unknown"
+    source_level = get_source_club_level(player_context)
+    target_rank = level_rank(target_level)
+    source_rank = level_rank(source_level)
+    current_league = (
+        player_context.get("club", {}).get("league")
+        or player_context.get("profile", {}).get("league")
     )
+    minutes = to_float(player_context.get("performance_24_25", {}).get("minutes"))
+    caps = to_float(player_context.get("national_team", {}).get("international_caps"))
 
-    return clamp_score(
-        42
-        + min(attacking * 1.6, 22)
-        + min(creation, 22)
-        + min(defending, 14)
-    )
+    if target_rank == 0 and source_rank == 0 and minutes is None and caps is None:
+        return 50
 
+    score = 50
 
-def score_culture_fit_subscore(player_context, club_context):
-    player_nationality = player_context.get("profile", {}).get("nationality")
-    target_players = flatten_club_players(club_context)
+    if target_rank >= 3:
+        if source_rank >= 3:
+            score += 12
+        elif source_rank == 2:
+            score -= 8
+        else:
+            score -= 14
 
-    if not player_nationality or not target_players:
-        return None
+    if caps is not None:
+        if caps >= 25:
+            score += 16
+        elif caps >= 5:
+            score += 9
+        elif caps > 0:
+            score += 4
 
-    player_language_groups = language_groups_for_nationality(player_nationality)
-    same_nationality_count = sum(
-        1
-        for player in target_players
-        if normalize_label(player.get("nationality"))
-        and normalize_label(player.get("nationality"))
-        == normalize_label(player_nationality)
-    )
-    same_language_count = 0
-
-    if player_language_groups:
-        same_language_count = sum(
-            1
-            for player in target_players
-            if player_language_groups.intersection(
-                language_groups_for_nationality(player.get("nationality"))
-            )
-        )
-
-    if same_nationality_count >= 2 or same_language_count >= 4:
-        return 85
-    if same_nationality_count >= 1 or same_language_count >= 2:
-        return 65
-
-    return 45
-
-
-def score_pressure_readiness_subscore(player_context):
-    pressure_readiness = (
-        player_context.get("derived_scout_metrics", {}).get("pressure_readiness")
-        or {}
-    )
-    score = pressure_readiness.get("score")
-
-    if score is None:
-        return None
+    if current_league in TOP_LEAGUES and minutes is not None:
+        if minutes >= 1800:
+            score += 16
+        elif minutes >= 900:
+            score += 8
+    elif target_rank >= 3 and minutes is not None and minutes < 900:
+        score -= 5
 
     return clamp_score(score)
 
 
-def score_transfer_risk_subscore(player_context):
-    transfer_summary = player_context.get("transfer_history_summary")
-    transfers = get_transfer_items(player_context)
+def score_transfer_risk_subscore(
+    player_context,
+    financial_fit_score,
+    squad_fit_score,
+):
+    age = to_float(player_context.get("profile", {}).get("age"))
+    player_value_m = get_player_market_value_m(player_context)
+    years_left = to_float(player_context.get("contract", {}).get("contract_years_left"))
+    injury_days = to_float(player_context.get("risk_snapshot", {}).get("injury_days"))
+    score = 50
 
-    if transfer_summary is None and transfers is None:
-        return None
+    if player_value_m is not None:
+        if player_value_m >= 100:
+            score += 18
+        elif player_value_m >= 50:
+            score += 12
+        elif player_value_m <= 10:
+            score -= 6
 
-    transfer_count = len(transfers)
-    loans = 0
-
-    if isinstance(transfer_summary, dict):
-        loans = to_float(transfer_summary.get("loans")) or 0
-
-    if transfer_count <= 2:
-        score = 84
-    elif transfer_count <= 5:
-        score = 66
-    else:
-        score = 45
-
-    if loans >= 3:
+    if financial_fit_score is not None and financial_fit_score < 55:
+        score += 18
+    elif financial_fit_score is not None and financial_fit_score >= 75:
         score -= 8
 
+    if age is not None:
+        if age >= 33:
+            score += 16
+        elif age >= 30:
+            score += 9
+        elif age <= 23:
+            score -= 4
+
+    if years_left is not None:
+        if years_left > 3:
+            score += 14
+        elif years_left <= 1:
+            score -= 8
+
+    if squad_fit_score is not None and squad_fit_score < 55:
+        score += 12
+    elif squad_fit_score is not None and squad_fit_score >= 75:
+        score -= 6
+
+    if injury_days is not None:
+        if injury_days >= 90:
+            score += 12
+        elif injury_days >= 30:
+            score += 6
+
     return clamp_score(score)
 
 
-def build_sub_scores(player_context, club_context):
-    return {
-        "player_quality_score": score_player_quality(player_context),
-        "squad_fit_score": score_squad_fit_subscore(player_context, club_context),
-        "financial_fit_score": score_financial_fit_subscore(
+def build_sub_scores(player_context, club_context, db=None):
+    squad_fit_score = clamp_score(score_squad_fit_subscore(player_context, club_context))
+    financial_fit_score = clamp_score(
+        score_financial_fit_subscore(
             player_context,
             club_context,
+        )
+    )
+
+    return {
+        "player_quality_score": clamp_score(score_player_quality(player_context)),
+        "squad_fit_score": squad_fit_score,
+        "financial_fit_score": financial_fit_score,
+        "age_profile_score": clamp_score(
+            score_age_profile_subscore(player_context, club_context)
         ),
-        "age_profile_score": score_age_profile(player_context),
-        "contract_score": score_contract_subscore(player_context),
-        "performance_score": score_performance_subscore(player_context),
-        "advanced_stats_score": score_advanced_stats_subscore(player_context),
-        "culture_fit_score": score_culture_fit_subscore(player_context, club_context),
-        "pressure_readiness_score": score_pressure_readiness_subscore(player_context),
-        "transfer_risk_score": score_transfer_risk_subscore(player_context),
+        "contract_score": clamp_score(score_contract_subscore(player_context)),
+        "performance_score": clamp_score(score_performance_subscore(player_context)),
+        "advanced_stats_score": clamp_score(score_advanced_stats_subscore(player_context)),
+        "culture_fit_score": clamp_score(
+            score_culture_fit_subscore(player_context, club_context, db)
+        ),
+        "pressure_readiness_score": clamp_score(
+            score_pressure_readiness_subscore(player_context, club_context)
+        ),
+        "transfer_risk_score": clamp_score(
+            score_transfer_risk_subscore(
+                player_context,
+                financial_fit_score,
+                squad_fit_score,
+            )
+        ),
     }
 
 
@@ -778,7 +1292,8 @@ def calculate_weighted_fit_score(sub_scores):
             missing_scores.append(key)
             continue
 
-        weighted_total += value * weight
+        weighted_value = 100 - value if key == "transfer_risk_score" else value
+        weighted_total += weighted_value * weight
         available_weight += weight
 
     if not available_weight:
@@ -790,13 +1305,15 @@ def calculate_weighted_fit_score(sub_scores):
 def grade_from_score(score):
     if score is None:
         return "Poor Fit"
-    if score >= 85:
+    if score >= 90:
         return "Elite Fit"
-    if score >= 70:
+    if score >= 80:
         return "Strong Fit"
-    if score >= 55:
+    if score >= 70:
+        return "Good Fit"
+    if score >= 60:
         return "Moderate Fit"
-    if score >= 40:
+    if score >= 50:
         return "Risky Fit"
 
     return "Poor Fit"
@@ -820,11 +1337,13 @@ def build_strengths(sub_scores, player_context, club_context):
     if (sub_scores.get("financial_fit_score") or 0) >= 70:
         strengths.append("Financial profile looks manageable for the target club.")
     if (sub_scores.get("contract_score") or 0) >= 70:
-        strengths.append("Contract risk is low.")
+        strengths.append("Contract situation improves transfer feasibility.")
     if (sub_scores.get("culture_fit_score") or 0) >= 70:
         strengths.append("Objective culture-fit signals are positive.")
     if (sub_scores.get("pressure_readiness_score") or 0) >= 70:
         strengths.append("Pressure readiness indicators are strong.")
+    if sub_scores.get("transfer_risk_score") is not None and sub_scores["transfer_risk_score"] <= 40:
+        strengths.append("Transfer risk profile is relatively low.")
     if not strengths:
         strengths.append("Scenario has enough available data for a baseline fit estimate.")
 
@@ -845,16 +1364,16 @@ def build_risks(sub_scores, missing_scores, player_context, club_context):
             for score_key in general_missing_scores[:3]
         )
         risks.append(f"Missing verified data limits scoring for: {missing_labels}.")
-    if sub_scores.get("advanced_stats_score") is None:
+    if not player_context.get("advanced_stats_24_25"):
         risks.append("Limited verified advanced stats.")
     if sub_scores.get("financial_fit_score") is not None and sub_scores["financial_fit_score"] < 55:
         risks.append("Financially difficult move.")
     if sub_scores.get("squad_fit_score") is not None and sub_scores["squad_fit_score"] < 55:
         risks.append("Target club already has notable depth in this position group.")
     if sub_scores.get("contract_score") is not None and sub_scores["contract_score"] < 55:
-        risks.append("Contract risk is high.")
-    if sub_scores.get("transfer_risk_score") is not None and sub_scores["transfer_risk_score"] < 55:
-        risks.append("Transfer history suggests additional adaptation or stability risk.")
+        risks.append("Long contract may reduce transfer feasibility.")
+    if sub_scores.get("transfer_risk_score") is not None and sub_scores["transfer_risk_score"] >= 65:
+        risks.append("Transfer risk is elevated by fee, contract, age, injury or squad-fit factors.")
     if sub_scores.get("performance_score") is not None and sub_scores["performance_score"] < 60:
         risks.append("Recent performance data is limited or below elite transfer confidence.")
     if sub_scores.get("culture_fit_score") is not None and sub_scores["culture_fit_score"] < 55:
@@ -865,24 +1384,68 @@ def build_risks(sub_scores, missing_scores, player_context, club_context):
     return risks
 
 
-def calculate_transfer_fit_score(player_context, club_context):
-    sub_scores = build_sub_scores(player_context, club_context)
+def build_deterministic_summary(player_name, club_name, grade, fit_score, sub_scores):
+    positive_labels = {
+        "player_quality_score": "strong player quality",
+        "performance_score": "strong performance",
+        "advanced_stats_score": "advanced stats support",
+        "squad_fit_score": "squad need",
+        "financial_fit_score": "financial fit",
+        "age_profile_score": "positive age profile",
+        "contract_score": "contract feasibility",
+        "culture_fit_score": "verified culture-fit signals",
+        "pressure_readiness_score": "pressure readiness",
+    }
+    concern_labels = {
+        "player_quality_score": "player quality",
+        "performance_score": "performance",
+        "advanced_stats_score": "advanced stats",
+        "squad_fit_score": "squad depth",
+        "financial_fit_score": "financial fit",
+        "age_profile_score": "age profile",
+        "contract_score": "contract feasibility",
+        "culture_fit_score": "culture-fit signals",
+        "pressure_readiness_score": "pressure readiness",
+    }
+    positives = [
+        label
+        for key, label in positive_labels.items()
+        if sub_scores.get(key) is not None and sub_scores[key] >= 70
+    ]
+    concerns = [
+        label
+        for key, label in concern_labels.items()
+        if sub_scores.get(key) is not None and sub_scores[key] < 55
+    ]
+
+    if sub_scores.get("transfer_risk_score") is not None:
+        if sub_scores["transfer_risk_score"] >= 65:
+            concerns.append("transfer risk")
+        elif sub_scores["transfer_risk_score"] <= 40:
+            positives.append("low transfer risk")
+
+    positive_text = ", ".join(positives[:3]) if positives else "balanced baseline data"
+    concern_text = ", ".join(concerns[:3]) if concerns else "no major deterministic concern"
+
+    return (
+        f"{player_name} to {club_name} grades as {grade} with a "
+        f"{fit_score}/100 deterministic Transfer Index. The score is driven by "
+        f"{positive_text}, but reduced by {concern_text}."
+    )
+
+
+def calculate_transfer_fit_score(player_context, club_context, db=None):
+    sub_scores = build_sub_scores(player_context, club_context, db)
     fit_score, missing_scores = calculate_weighted_fit_score(sub_scores)
     fit_score = fit_score if fit_score is not None else 0
     grade = grade_from_score(fit_score)
     player_name = player_context["profile"].get("name") or "This player"
     club_name = club_context.get("club_name") or "the target club"
-    available_score_count = len(
-        [
-            value
-            for value in sub_scores.values()
-            if value is not None
-        ]
-    )
 
     return {
         "fit_score": fit_score,
         "grade": grade,
+        "recommendation": grade,
         "sub_scores": sub_scores,
         "strengths": build_strengths(sub_scores, player_context, club_context),
         "risks": build_risks(
@@ -891,12 +1454,12 @@ def calculate_transfer_fit_score(player_context, club_context):
             player_context,
             club_context,
         ),
-        "summary": (
-            f"{player_name} to {club_name} grades as {grade} with a "
-            f"{fit_score}/100 deterministic fit score. The score is normalized "
-            f"across {available_score_count}/10 available sub-scores and weighs "
-            "player quality, squad fit, financial fit, performance, advanced stats, "
-            "age profile, contract, culture fit, pressure readiness and transfer risk."
+        "summary": build_deterministic_summary(
+            player_name,
+            club_name,
+            grade,
+            fit_score,
+            sub_scores,
         ),
     }
 
@@ -929,8 +1492,10 @@ def build_transfer_scenario_context(player_id, target_club, db):
             },
             "deterministic_analysis": None,
             "scout_fit_layers": None,
+            "club_intelligence": None,
         }
 
+    club_intelligence = build_club_intelligence(club_context)
     scenario = {
         "player_name": player_context.get("profile", {}).get("name"),
         "target_club": club_context.get("club_name"),
@@ -951,8 +1516,10 @@ def build_transfer_scenario_context(player_id, target_club, db):
         "deterministic_analysis": calculate_transfer_fit_score(
             player_context,
             club_context,
+            db,
         ),
         "scout_fit_layers": scout_fit_layers,
+        "club_intelligence": club_intelligence,
     }
 
 

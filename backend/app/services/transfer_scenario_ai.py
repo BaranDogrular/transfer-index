@@ -1,8 +1,13 @@
 import json
 import logging
+import os
+import re
 from datetime import datetime, timedelta
 from hashlib import sha256
+from pathlib import Path
 
+from dotenv import load_dotenv
+from openai import OpenAI
 
 from app.models.transfer_scenario_analysis_db import TransferScenarioAnalysisDB
 from app.services.transfer_scenario_analyzer import (
@@ -11,8 +16,25 @@ from app.services.transfer_scenario_analyzer import (
 )
 
 
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+load_dotenv(Path(__file__).resolve().parents[3] / ".env")
+
+DEFAULT_MODEL = "gpt-4o-mini"
 CACHE_TTL_DAYS = 7
 logger = logging.getLogger(__name__)
+
+AI_INTERPRETATION_SCHEMA = {
+    "recommendation": "",
+    "summary": "",
+    "tactical_fit": "",
+    "financial_risk": "",
+    "contract_risk": "",
+    "squad_fit": "",
+    "culture_fit": "",
+    "main_strengths": [],
+    "main_risks": [],
+    "missing_data_notes": [],
+}
 
 
 def get_empty_ai_fields():
@@ -40,19 +62,32 @@ def normalize_list(value):
     return [str(item).strip() for item in value if str(item).strip()]
 
 
-def normalize_ai_response(value):
+def strip_json_code_fence(value):
+    text = str(value or "").strip()
+    match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
+
+    if match:
+        return match.group(1).strip()
+
+    return text
+
+
+def normalize_ai_response(value, deterministic):
     normalized = get_empty_ai_fields()
+    main_strengths = normalize_list(
+        value.get("main_strengths", value.get("strengths"))
+    )
+    main_risks = normalize_list(value.get("main_risks", value.get("risks")))
+
     normalized.update(
         {
-            "fit_score": clamp_fit_score(value.get("fit_score")),
-            "grade": normalize_string(value.get("grade")),
-            "sub_scores": (
-                value.get("sub_scores")
-                if isinstance(value.get("sub_scores"), dict)
-                else {}
-            ),
-            "strengths": normalize_list(value.get("strengths")),
-            "risks": normalize_list(value.get("risks")),
+            "fit_score": deterministic.get("fit_score"),
+            "grade": deterministic.get("grade", ""),
+            "sub_scores": deterministic.get("sub_scores", {}),
+            "strengths": main_strengths,
+            "risks": main_risks,
+            "main_strengths": main_strengths,
+            "main_risks": main_risks,
             "tactical_fit": normalize_string(value.get("tactical_fit")),
             "financial_risk": normalize_string(value.get("financial_risk")),
             "contract_risk": normalize_string(value.get("contract_risk")),
@@ -102,6 +137,8 @@ def serialize_cached_analysis(cached_analysis):
             "sub_scores": cached_analysis.sub_scores or {},
             "strengths": cached_analysis.strengths or [],
             "risks": cached_analysis.risks or [],
+            "main_strengths": cached_analysis.strengths or [],
+            "main_risks": cached_analysis.risks or [],
             "recommendation": cached_analysis.recommendation or "",
             "summary": cached_analysis.summary or "",
             "tactical_fit": cached_analysis.tactical_fit or "",
@@ -198,6 +235,8 @@ def fallback_from_context(scenario_context, reason):
             "sub_scores": deterministic.get("sub_scores", {}),
             "strengths": deterministic.get("strengths", []),
             "risks": deterministic.get("risks", []),
+            "main_strengths": deterministic.get("strengths", []),
+            "main_risks": deterministic.get("risks", []),
             "tactical_fit": "Not available in deterministic fallback.",
             "financial_risk": "See deterministic risks.",
             "contract_risk": "See deterministic risks.",
@@ -220,6 +259,125 @@ def fallback_from_context(scenario_context, reason):
     return fallback
 
 
+def get_nested(value, *keys):
+    current = value
+
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+
+        current = current.get(key)
+
+    return current
+
+
+def build_prompt_payload(scenario_context):
+    player_context = scenario_context.get("player_context") or {}
+    scenario = scenario_context.get("scenario") or {}
+    deterministic = scenario_context.get("deterministic_analysis") or {}
+    performance = player_context.get("performance_24_25") or {}
+    advanced_stats = player_context.get("advanced_stats_24_25") or {}
+    market = player_context.get("market") or {}
+    contract = player_context.get("contract") or {}
+
+    return {
+        "player": {
+            "name": get_nested(player_context, "profile", "name"),
+            "age": get_nested(player_context, "profile", "age"),
+            "position": get_nested(player_context, "profile", "position"),
+            "current_club": (
+                get_nested(player_context, "club", "current_club")
+                or get_nested(player_context, "profile", "club")
+                or scenario.get("source_club")
+            ),
+            "target_club": scenario.get("target_club"),
+            "market_value": (
+                market.get("current_market_value")
+                or market.get("current_value")
+                or scenario.get("market_value")
+            ),
+            "contract_years_left": (
+                contract.get("contract_years_left")
+                or scenario.get("contract_years_left")
+            ),
+        },
+        "performance_summary": {
+            "matches": performance.get("matches"),
+            "starts": performance.get("starts"),
+            "minutes": performance.get("minutes"),
+            "goals": performance.get("goals"),
+            "assists": performance.get("assists"),
+            "goals_per_90": performance.get("goals_per_90"),
+            "assists_per_90": performance.get("assists_per_90"),
+        },
+        "advanced_stats_summary": {
+            "xg": advanced_stats.get("xg"),
+            "xa": advanced_stats.get("xa"),
+            "npxg": advanced_stats.get("npxg"),
+            "shots": advanced_stats.get("shots"),
+            "shots_on_target": advanced_stats.get("shots_on_target"),
+            "key_passes": advanced_stats.get("key_passes"),
+            "progressive_passes": advanced_stats.get("progressive_passes"),
+            "progressive_carries": advanced_stats.get("progressive_carries"),
+            "tackles": advanced_stats.get("tackles"),
+            "interceptions": advanced_stats.get("interceptions"),
+        },
+        "deterministic_fit": {
+            "fit_score": deterministic.get("fit_score"),
+            "grade": deterministic.get("grade"),
+            "sub_scores": deterministic.get("sub_scores"),
+            "strengths": deterministic.get("strengths"),
+            "risks": deterministic.get("risks"),
+        },
+    }
+
+
+def build_ai_messages(scenario_context):
+    prompt_payload = build_prompt_payload(scenario_context)
+
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are a professional football scout. Use only the provided "
+                "structured data. Do not recalculate fit_score or sub_scores. "
+                "Do not invent facts. If data is missing, mention it in "
+                "missing_data_notes. Return only valid JSON."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Write a concise transfer scenario interpretation for this "
+                "player and target club.\n\n"
+                "Required JSON schema:\n"
+                f"{json.dumps(AI_INTERPRETATION_SCHEMA, ensure_ascii=False)}\n\n"
+                "Context:\n"
+                f"{json.dumps(prompt_payload, ensure_ascii=False, default=str)}"
+            ),
+        },
+    ]
+
+
+def call_openai_for_analysis(scenario_context, deterministic):
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    if not api_key or not api_key.strip():
+        return None
+
+    client = OpenAI(api_key=api_key, timeout=30)
+    response = client.chat.completions.create(
+        model=os.getenv("OPENAI_MODEL", DEFAULT_MODEL),
+        messages=build_ai_messages(scenario_context),
+        temperature=0.2,
+        max_tokens=700,
+        response_format={"type": "json_object"},
+    )
+    raw_content = response.choices[0].message.content
+    parsed_response = json.loads(strip_json_code_fence(raw_content))
+    return normalize_ai_response(parsed_response, deterministic)
+
+
 def analyze_transfer_scenario_with_ai(player_id, target_club, db):
     scenario_context = build_transfer_scenario_context(player_id, target_club, db)
 
@@ -235,7 +393,41 @@ def analyze_transfer_scenario_with_ai(player_id, target_club, db):
     if cached_analysis:
         return cached_analysis
 
-    return fallback_from_context(
+    deterministic = scenario_context.get("deterministic_analysis") or {}
+
+    if not os.getenv("OPENAI_API_KEY", "").strip():
+        logger.info(
+            "OPENAI_API_KEY is not configured. Using deterministic transfer scenario fallback."
+        )
+        return fallback_from_context(
+            scenario_context,
+            "OpenAI API key missing. Returned deterministic analysis.",
+        )
+
+    try:
+        ai_response = call_openai_for_analysis(scenario_context, deterministic)
+    except Exception:
+        logger.warning(
+            "OpenAI transfer scenario analysis failed. Using deterministic fallback."
+        )
+        return fallback_from_context(
+            scenario_context,
+            "OpenAI analysis unavailable. Returned deterministic analysis.",
+        )
+
+    if not ai_response:
+        return fallback_from_context(
+            scenario_context,
+            "OpenAI API key missing. Returned deterministic analysis.",
+        )
+
+    ai_response["source"] = "openai"
+    save_transfer_analysis_cache(
+        db,
+        player_id,
+        target_club,
         scenario_context,
-        "OpenAI integration is not enabled yet. Returned deterministic analysis.",
+        context_hash,
+        ai_response,
     )
+    return ai_response

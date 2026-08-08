@@ -1,13 +1,113 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { Link } from "react-router-dom";
+import { formatClubDisplayName } from "../utils/display";
+
+const TRENDING_SEARCH_NAMES = [
+  "Lamine Yamal",
+  "Erling Haaland",
+  "Kylian Mbappe",
+  "Pedri",
+];
+
+const normalizeSearchText = (value) =>
+  String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+const toNumber = (value) => {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : 0;
+};
+
+const hasNumber = (value) => {
+  if (value === null || value === undefined || value === "") {
+    return false;
+  }
+
+  return Number.isFinite(Number(value));
+};
+
+const formatMoney = (value) => {
+  const numberValue = Number(value);
+
+  if (!Number.isFinite(numberValue) || numberValue <= 0) {
+    return "-";
+  }
+
+  return `€${numberValue.toFixed(2)}M`;
+};
+
+const getPlayerScore = (player) => {
+  const goals = toNumber(player.goals);
+  const assists = toNumber(player.assists);
+  const matches = Math.max(toNumber(player.matches), 1);
+  const age = toNumber(player.age);
+  const marketValue = toNumber(player.market_value_m);
+  const injuryDays = hasNumber(player.injury_days)
+    ? Number(player.injury_days)
+    : null;
+  let score = 35;
+
+  score += Math.min(((goals + assists) / matches) * 18, 18);
+
+  if (age >= 22 && age <= 28) {
+    score += 20;
+  } else if (age > 0 && age <= 31) {
+    score += 10;
+  }
+
+  if (marketValue > 0 && marketValue <= 25) {
+    score += 15;
+  }
+
+  if (injuryDays !== null && injuryDays < 30) {
+    score += 10;
+  }
+
+  return Math.min(Math.round(score), 92);
+};
 
 export default function Home() {
   const [query, setQuery] = useState("");
   const [players, setPlayers] = useState([]);
+  const [allPlayers, setAllPlayers] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [playersLoading, setPlayersLoading] = useState(true);
 
-  // SEARCH
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadPlayers = async () => {
+      try {
+        setPlayersLoading(true);
+
+        const response = await fetch("http://127.0.0.1:8000/players");
+        const data = await response.json();
+
+        if (isCurrent) {
+          setAllPlayers(Array.isArray(data.players) ? data.players : []);
+        }
+      } catch {
+        if (isCurrent) {
+          setAllPlayers([]);
+        }
+      } finally {
+        if (isCurrent) {
+          setPlayersLoading(false);
+        }
+      }
+    };
+
+    loadPlayers();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, []);
+
   const searchPlayers = async (searchTerm) => {
     if (!searchTerm.trim()) {
       setPlayers([]);
@@ -16,34 +116,152 @@ export default function Home() {
 
     try {
       setLoading(true);
-
-      const response = await fetch("http://127.0.0.1:8000/players");
-
-      const data = await response.json();
-
-      const filtered = data.players.filter((player) =>
-        player.name.toLowerCase().includes(searchTerm.toLowerCase()),
+      const normalizedTerm = normalizeSearchText(searchTerm);
+      const filtered = allPlayers.filter((player) =>
+        normalizeSearchText(player.name).includes(normalizedTerm),
       );
 
-      setPlayers(filtered);
-    } catch (error) {
-      console.error("SEARCH ERROR:", error);
+      setPlayers(filtered.slice(0, 8));
+    } catch {
+      setPlayers([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // SEARCH EFFECT
   useEffect(() => {
     const timeout = setTimeout(() => {
       searchPlayers(query);
     }, 300);
 
     return () => clearTimeout(timeout);
-  }, [query]);
+  }, [query, allPlayers]);
+
+  const scoredPlayers = useMemo(
+    () =>
+      allPlayers.map((player) => ({
+        ...player,
+        transferIndexScore: getPlayerScore(player),
+      })),
+    [allPlayers],
+  );
+
+  const homeSections = useMemo(() => {
+    const sortByScore = (items) =>
+      [...items].sort((firstPlayer, secondPlayer) => {
+        if (secondPlayer.transferIndexScore !== firstPlayer.transferIndexScore) {
+          return secondPlayer.transferIndexScore - firstPlayer.transferIndexScore;
+        }
+
+        return toNumber(secondPlayer.market_value_m) - toNumber(firstPlayer.market_value_m);
+      });
+    const highestTransferIndex = sortByScore(scoredPlayers).slice(0, 4);
+    const topRisingTalents = sortByScore(
+      scoredPlayers.filter((player) => toNumber(player.age) > 0 && toNumber(player.age) <= 21),
+    ).slice(0, 4);
+    const hasUpdatedAt = scoredPlayers.some((player) => player.updated_at);
+    const recentlyUpdatedPlayers = hasUpdatedAt
+      ? [...scoredPlayers]
+          .filter((player) => player.updated_at)
+          .sort(
+            (firstPlayer, secondPlayer) =>
+              new Date(secondPlayer.updated_at).getTime() -
+              new Date(firstPlayer.updated_at).getTime(),
+          )
+          .slice(0, 4)
+      : scoredPlayers.slice(0, 4);
+    const trendingPlayers = TRENDING_SEARCH_NAMES.map((name) => {
+      const normalizedName = normalizeSearchText(name);
+
+      return scoredPlayers.find((player) =>
+        normalizeSearchText(player.name).includes(normalizedName),
+      );
+    }).filter(Boolean);
+    const trendingIds = new Set(trendingPlayers.map((player) => player.id));
+    const trendingSearches = [
+      ...trendingPlayers,
+      ...highestTransferIndex.filter((player) => !trendingIds.has(player.id)),
+    ].slice(0, 4);
+
+    return [
+      {
+        title: "Top Rising Talents",
+        subtitle: "Young profiles with high Transfer Index.",
+        players: topRisingTalents,
+      },
+      {
+        title: "Highest Transfer Index",
+        subtitle: "Best deterministic score profiles.",
+        players: highestTransferIndex,
+      },
+      {
+        title: "Recently Updated Players",
+        subtitle: hasUpdatedAt ? "Latest refreshed player records." : "Featured player records.",
+        players: recentlyUpdatedPlayers,
+      },
+      {
+        title: "Trending Searches",
+        subtitle: "Frequently tracked player profiles.",
+        players: trendingSearches,
+      },
+    ];
+  }, [scoredPlayers]);
+
+  const renderPlayerRow = (player, sectionTitle) => (
+    <Link
+      key={`${sectionTitle}-${player.id}`}
+      to={`/player/${player.id}`}
+      className="
+        group
+        flex
+        items-center
+        gap-3
+        rounded-2xl
+        border
+        border-white/5
+        bg-black/25
+        px-3
+        py-3
+        transition-colors
+        hover:border-cyan-400/25
+        hover:bg-white/10
+      "
+    >
+      {player.image_url ? (
+        <img
+          src={player.image_url}
+          alt={player.name}
+          className="h-11 w-11 shrink-0 rounded-full border border-white/10 bg-zinc-900 object-cover"
+        />
+      ) : (
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-cyan-400/20 bg-cyan-400/10 text-sm font-black text-cyan-200">
+          {String(player.name || "?").slice(0, 1)}
+        </div>
+      )}
+
+      <div className="min-w-0 flex-1 text-left">
+        <p className="truncate text-sm font-black text-white group-hover:text-cyan-200">
+          {player.name || "-"}
+        </p>
+        <p className="mt-1 truncate text-xs text-zinc-400">
+          {formatClubDisplayName(player.club)} / {player.position || "-"}
+        </p>
+      </div>
+
+      <div className="shrink-0 text-right">
+        <p className="text-sm font-black text-emerald-300">
+          {player.transferIndexScore}
+        </p>
+        <p className="mt-1 text-[11px] font-semibold text-zinc-500">
+          {formatMoney(player.market_value_m)}
+        </p>
+      </div>
+    </Link>
+  );
+  const isSearchLoading = loading || (Boolean(query.trim()) && playersLoading);
 
   return (
-    <div className="scout-theme relative min-h-screen overflow-hidden text-white">
+    <div className="scout-theme relative min-h-screen overflow-x-hidden text-white">
       {/* VIDEO */}
       <video
         autoPlay
@@ -52,9 +270,8 @@ export default function Home() {
         playsInline
         preload="metadata"
         className="
-          absolute
-          top-0
-          left-0
+          fixed
+          inset-0
           z-0
           w-full
           h-full
@@ -295,7 +512,7 @@ export default function Home() {
                 z-50
               "
               >
-                {loading ? (
+                {isSearchLoading ? (
                   <div
                     className="
                     p-4
@@ -337,7 +554,7 @@ export default function Home() {
                           text-gray-400
                         "
                         >
-                          {player.club}
+                          {formatClubDisplayName(player.club)}
                         </p>
                       </div>
 
@@ -348,7 +565,7 @@ export default function Home() {
                         font-semibold
                       "
                       >
-                        {player.position}
+                        {player.position || "-"}
                       </span>
                     </Link>
                   ))
@@ -409,6 +626,56 @@ export default function Home() {
           </div>
         </div>
       </div>
+
+      <section className="relative z-20 mx-auto w-full max-w-7xl px-6 pb-16">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          {homeSections.map((section) => (
+            <div
+              key={section.title}
+              className="rounded-3xl border border-white/10 bg-black/35 p-5 shadow-2xl shadow-black/30 backdrop-blur-xl"
+            >
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-cyan-300">
+                    Scout Board
+                  </p>
+                  <h2 className="mt-1 text-xl font-black text-white">
+                    {section.title}
+                  </h2>
+                  <p className="mt-1 text-sm text-zinc-400">
+                    {section.subtitle}
+                  </p>
+                </div>
+
+                <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-black text-emerald-200">
+                  Top 4
+                </span>
+              </div>
+
+              {playersLoading ? (
+                <div className="space-y-3">
+                  {[0, 1, 2, 3].map((item) => (
+                    <div
+                      key={item}
+                      className="h-[68px] animate-pulse rounded-2xl bg-white/5"
+                    />
+                  ))}
+                </div>
+              ) : section.players.length > 0 ? (
+                <div className="space-y-3">
+                  {section.players.map((player) =>
+                    renderPlayerRow(player, section.title),
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-white/5 bg-black/25 px-4 py-5 text-sm text-zinc-500">
+                  No players available.
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
