@@ -1,106 +1,106 @@
 # Transfer Index
 
-Transfer Index is a football scouting and transfer intelligence platform that combines player profiles, season performance, advanced statistics, market-value history, transfer records, and club context to evaluate both player quality and potential transfer fit.
+Transfer Index; oyuncu profillerini, sezon performansını, gelişmiş istatistikleri, piyasa değeri geçmişini, transfer kayıtlarını ve kulüp bağlamını bir araya getirerek hem oyuncu kalitesini hem de olası transfer uyumunu değerlendiren bir futbol scouting ve transfer istihbaratı platformudur.
 
-**Development Status:** Active Development
+**Geliştirme Durumu:** Aktif Geliştirme
 
-## Overview
+## Genel Bakış
 
-Football recruitment decisions depend on more than a player's headline statistics. Transfer Index brings several parts of the scouting workflow into one application:
+Futbolcu transfer kararları yalnızca öne çıkan birkaç istatistiğe dayanmaz. Transfer Index, scouting iş akışının farklı parçalarını tek bir uygulamada birleştirir:
 
-- player profiles and current-club information;
-- season performance and position-relevant advanced metrics;
-- historical market valuations and career transfers;
-- server-side scouting search and filtering;
-- club squad, age, nationality, footedness, and financial summaries;
-- deterministic player scoring and target-club transfer analysis.
+- oyuncu profilleri ve mevcut kulüp bilgileri;
+- sezon performansı ve pozisyona uygun gelişmiş metrikler;
+- geçmiş piyasa değerleri ve kariyer transferleri;
+- sunucu taraflı oyuncu arama ve filtreleme;
+- kulüp kadrosu, yaş, milliyet, tercih edilen ayak ve finansal özetler;
+- deterministik oyuncu puanlama ve hedef kulübe özel transfer analizi.
 
-The project separates two related but different questions:
+Proje, birbiriyle ilişkili ancak farklı iki soruyu ayrı değerlendirir:
 
-1. **Player evaluation:** How strong is the player independently of a destination club?
-2. **Player → target club fit:** How suitable is that player for a specific club's squad and financial context?
+1. **Oyuncu değerlendirmesi:** Oyuncu, hedef kulüpten bağımsız olarak ne kadar güçlü?
+2. **Oyuncu → hedef kulüp uyumu:** Oyuncu, belirli bir kulübün kadro ve finansal bağlamına ne kadar uygun?
 
-## Key Features
+## Temel Özellikler
 
-### Player Database
+### Oyuncu Veritabanı
 
-- Searchable and paginated player records
-- Player name, age, nationality, position, preferred foot, club, and league
-- Current market value, contract data, physical profile, and season output where available
-- Dedicated player and club pages
-- Side-by-side player comparison
-- Similar-player suggestions based on profile and performance attributes
+- Aranabilir ve sayfalanmış oyuncu kayıtları
+- Oyuncu adı, yaş, milliyet, pozisyon, tercih edilen ayak, kulüp ve lig bilgileri
+- Mevcutsa güncel piyasa değeri, sözleşme verileri, fiziksel profil ve sezon performansı
+- Oyuncu ve kulüpler için özel detay sayfaları
+- Yan yana oyuncu karşılaştırması
+- Profil ve performans özelliklerine dayalı benzer oyuncu önerileri
 
-### Player Analytics
+### Oyuncu Analitiği
 
-- Appearances, starts, minutes, goals, assists, and per-90 production
-- Position-aware advanced statistics for strikers, wingers, midfielders, defensive midfielders, centre-backs, full-backs, and goalkeepers
-- Club-independent deterministic player score with quality grade, strengths, and risks
-- Missing optional data remains visible as unavailable instead of removing the player from the database
+- Maç, ilk 11, dakika, gol, asist ve 90 dakika başına üretim verileri
+- Forvet, kanat, orta saha, defansif orta saha, stoper, bek ve kaleciler için pozisyona duyarlı gelişmiş istatistikler
+- Kulüpten bağımsız deterministik oyuncu puanı; kalite derecesi, güçlü yönler ve riskler
+- Eksik isteğe bağlı veriler oyuncuyu veritabanından çıkarmak yerine `null`/kullanılamıyor olarak korunur
 
-### Market Value Intelligence
+### Piyasa Değeri İstihbaratı
 
-- Current and peak market value
-- Lowest recorded value and historical growth calculation
-- Historical valuation chart on the player page
+- Güncel ve en yüksek piyasa değeri
+- Kaydedilen en düşük değer ve geçmiş büyüme hesabı
+- Oyuncu sayfasında geçmiş piyasa değeri grafiği
 
-### Career Transfer History
+### Kariyer Transfer Geçmişi
 
-- Previous and destination clubs
-- Transfer date and season
-- Market value and transfer fee
-- Transfer type, including loans, loan returns, and free transfers when present in the source data
+- Önceki ve yeni kulüpler
+- Transfer tarihi ve sezonu
+- Piyasa değeri ve transfer bedeli
+- Kaynak veride mevcutsa kiralama, kiralıktan dönüş ve bedelsiz transfer dahil transfer türleri
 
-### Scouting Database
+### Scouting Veritabanı
 
-The scouting page performs filtering on the server and supports combined filters for:
+Scouting sayfası filtrelemeyi sunucu tarafında gerçekleştirir ve aşağıdaki filtrelerin birlikte kullanılmasını destekler:
 
-- player search;
-- position;
-- nationality;
-- league;
-- club;
-- preferred foot;
-- minimum and maximum age;
-- minimum and maximum market value;
-- minimum minutes;
-- minimum goals;
-- minimum assists.
+- oyuncu arama;
+- pozisyon;
+- milliyet;
+- lig;
+- kulüp;
+- tercih edilen ayak;
+- minimum ve maksimum yaş;
+- minimum ve maksimum piyasa değeri;
+- minimum dakika;
+- minimum gol;
+- minimum asist.
 
-Search input is debounced, numeric ranges are validated, filter options are derived from database values, and resetting the filters restores the default player list.
+Arama alanında debounce uygulanır, sayısal aralıklar doğrulanır, filtre seçenekleri veritabanı değerlerinden üretilir ve filtreleri sıfırlamak varsayılan oyuncu listesini geri getirir.
 
-### Transfer Scenario Analyzer
+### Transfer Senaryosu Analizörü
 
 ```text
-Player + Target Club
+Oyuncu + Hedef Kulüp
           ↓
-Deterministic Transfer Fit Analysis
+Deterministik Transfer Uyum Analizi
 ```
 
-The analyzer combines the selected player's structured context with the destination club's squad composition and financial profile. Selecting the player's current club is rejected by backend validation.
+Analizör, seçilen oyuncunun yapılandırılmış bağlamını hedef kulübün kadro yapısı ve finansal profiliyle birleştirir. Oyuncunun mevcut kulübünün hedef olarak seçilmesi backend doğrulamasıyla reddedilir.
 
-### Deterministic Transfer Fit Engine
+### Deterministik Transfer Uyum Motoru
 
-The Transfer Fit Score is calculated by application logic, not by a language model. The current factors and weights are:
+Transfer Uyum Puanı bir dil modeli tarafından değil, uygulama mantığı tarafından hesaplanır. Güncel faktörler ve ağırlıkları:
 
-| Factor | Weight |
+| Faktör | Ağırlık |
 | --- | ---: |
-| Player Quality | 20% |
-| Squad Fit | 15% |
-| Financial Fit | 15% |
-| Performance | 15% |
-| Advanced Stats | 10% |
-| Age Profile | 8% |
-| Contract | 7% |
-| Culture Fit | 5% |
-| Pressure Readiness | 3% |
-| Transfer Risk | 2% |
+| Oyuncu Kalitesi | %20 |
+| Kadro Uyumu | %15 |
+| Finansal Uyum | %15 |
+| Performans | %15 |
+| Gelişmiş İstatistikler | %10 |
+| Yaş Profili | %8 |
+| Sözleşme | %7 |
+| Kültürel Uyum | %5 |
+| Baskıya Hazırlık | %3 |
+| Transfer Riski | %2 |
 
-`transfer_risk_score` represents risk severity, so its contribution is inverted in the final fit calculation. If a sub-score cannot be calculated from verified data, it remains `null`; the final score is normalized over the weights of the available sub-scores instead of treating missing data as zero.
+`transfer_risk_score` risk seviyesini ifade ettiği için final uyum hesabındaki katkısı ters çevrilir. Doğrulanmış veriden hesaplanamayan bir alt puan `null` olarak kalır; eksik veri sıfır kabul edilmez ve final puanı yalnızca mevcut alt puanların ağırlıkları normalize edilerek hesaplanır.
 
-Grades use these ranges:
+Dereceler aşağıdaki aralıkları kullanır:
 
-| Score | Grade |
+| Puan | Derece |
 | --- | --- |
 | 85–100 | Elite Fit |
 | 70–84 | Strong Fit |
@@ -108,71 +108,71 @@ Grades use these ranges:
 | 40–54 | Risky Fit |
 | 0–39 | Poor Fit |
 
-### AI Scout Analysis — Planned / In Development
+### AI Scout Analizi — Planlandı / Geliştirme Aşamasında
 
-The Transfer Scenario OpenAI provider is not currently enabled. The implemented preparation layer is:
+Transfer Scenario için OpenAI sağlayıcısı şu anda etkin değildir. Hazır durumdaki altyapı:
 
 ```text
-Deterministic Engine
+Deterministik Motor
         ↓
-Compact Context Builder
+Kompakt Context Builder
         ↓
-Stable JSON + SHA256 Context Hash
+Kararlı JSON + SHA256 Context Hash
         ↓
-7-Day Cache Lookup
+7 Günlük Cache Kontrolü
         ↓
-AI Interpretation (planned)
+AI Yorumlama (planlandı)
 ```
 
-On a cache miss, the current endpoint returns `source: "fallback"` with the deterministic result and does not call OpenAI or cache the fallback. The intended AI layer will interpret the structured analysis; it will not invent or replace the Transfer Fit Score.
+Cache kaydı bulunmadığında güncel endpoint, `source: "fallback"` ile deterministik sonucu döndürür; OpenAI çağrısı yapmaz ve fallback sonucunu cache'e kaydetmez. Planlanan AI katmanı yapılandırılmış analizi yorumlayacaktır; Transfer Uyum Puanı'nı üretmeyecek veya değiştirmeyecektir.
 
-The repository also contains a separate OpenRouter-based player-report route. That legacy report is independent of the deterministic Transfer Scenario AI architecture.
+Repository ayrıca OpenRouter tabanlı ayrı bir oyuncu raporu endpoint'i içerir. Bu eski rapor servisi, deterministik Transfer Scenario AI mimarisinden bağımsızdır.
 
-## Data Sources
+## Veri Kaynakları
 
-### Transfermarkt-derived CSV data
+### Transfermarkt Türevli CSV Verileri
 
-Import scripts support player metadata, clubs, competitions, appearances, market valuations, and transfer history from CSV files using Transfermarkt-style schemas.
+Import scriptleri; Transfermarkt benzeri şemalara sahip CSV dosyalarından oyuncu meta verilerini, kulüpleri, turnuvaları, maç katılımlarını, piyasa değerlerini ve transfer geçmişini içe aktarmayı destekler.
 
-### FBref-derived advanced statistics
+### FBref Türevli Gelişmiş İstatistikler
 
-The advanced-stat import supports 2024/25 player metrics such as expected goals, expected assists, shots, progression, chance creation, defensive actions, aerials, and available goalkeeper statistics.
+Gelişmiş istatistik import süreci; 2024/25 sezonuna ait beklenen gol, beklenen asist, şut, top ilerletme, pozisyon üretimi, savunma aksiyonları, hava topu ve mevcut kaleci istatistiklerini destekler.
 
-Transfer Index is an independent educational and portfolio project. It is not affiliated with Transfermarkt or FBref. Data ownership and usage rights remain with the respective providers and dataset owners. The repository ignores the primary Transfermarkt CSV directory; obtain and use datasets in accordance with their applicable terms.
+Transfer Index bağımsız bir eğitim ve portföy projesidir. Transfermarkt veya FBref ile bağlantılı değildir. Verilerin mülkiyeti ve kullanım hakları ilgili sağlayıcılara ve veri seti sahiplerine aittir. Repository, ana Transfermarkt CSV klasörünü takip dışı bırakır; veri setlerini geçerli kullanım şartlarına uygun biçimde edinin ve kullanın.
 
-## Tech Stack
+## Teknoloji Yığını
 
-| Layer | Technologies |
+| Katman | Teknolojiler |
 | --- | --- |
 | Backend | Python, FastAPI, SQLAlchemy, PostgreSQL, Pandas, Pydantic |
 | Frontend | React, Vite, Tailwind CSS, React Router, Recharts |
-| AI status | OpenAI API for Transfer Scenario interpretation — planned/in development |
-| Optional legacy AI | OpenRouter-compatible player report service through the OpenAI Python client |
-| Testing | Python `unittest`, FastAPI `TestClient` |
+| AI durumu | Transfer Scenario yorumlaması için OpenAI API — planlandı/geliştirme aşamasında |
+| İsteğe bağlı eski AI servisi | OpenAI Python client üzerinden OpenRouter uyumlu oyuncu raporu servisi |
+| Test | Python `unittest`, FastAPI `TestClient` |
 
-## Architecture
+## Mimari
 
 ```mermaid
 flowchart LR
     UI[React / Vite Frontend] -->|HTTP JSON| API[FastAPI API]
-    API --> SERVICES[Context and Analysis Services]
+    API --> SERVICES[Bağlam ve Analiz Servisleri]
     SERVICES --> DB[(PostgreSQL)]
-    IMPORTS[CSV Import Scripts] --> DB
-    TM[Transfermarkt-derived Data] --> IMPORTS
-    FB[FBref-derived Data] --> IMPORTS
+    IMPORTS[CSV Import Scriptleri] --> DB
+    TM[Transfermarkt Türevli Veriler] --> IMPORTS
+    FB[FBref Türevli Veriler] --> IMPORTS
 ```
 
 ```mermaid
 flowchart TD
-    PLAYER[Player Context] --> ENGINE[Deterministic Transfer Fit Engine]
-    CLUB[Target Club Context] --> ENGINE
-    ENGINE --> SCORE[Fit Score, Sub-scores, Strengths, Risks]
-    SCORE --> COMPACT[Compact AI Context and SHA256 Hash]
-    COMPACT --> FALLBACK[Deterministic Fallback]
-    COMPACT -. planned .-> AI[AI Interpretation]
+    PLAYER[Oyuncu Bağlamı] --> ENGINE[Deterministik Transfer Uyum Motoru]
+    CLUB[Hedef Kulüp Bağlamı] --> ENGINE
+    ENGINE --> SCORE[Uyum Puanı, Alt Puanlar, Güçlü Yönler, Riskler]
+    SCORE --> COMPACT[Kompakt AI Bağlamı ve SHA256 Hash]
+    COMPACT --> FALLBACK[Deterministik Fallback]
+    COMPACT -. planlandı .-> AI[AI Yorumlama]
 ```
 
-## Project Structure
+## Proje Yapısı
 
 ```text
 transfer-index/
@@ -208,17 +208,17 @@ transfer-index/
 └── README.md
 ```
 
-## Getting Started
+## Başlangıç
 
-### Prerequisites
+### Gereksinimler
 
-- Python 3.11 or newer
-- Node.js compatible with Vite 8
+- Python 3.11 veya üzeri
+- Vite 8 ile uyumlu Node.js
 - PostgreSQL
 
-### Backend Setup
+### Backend Kurulumu
 
-The repository currently has no committed `requirements.txt` or `pyproject.toml`. Install the backend packages used by the code explicitly:
+Repository'de şu anda commit edilmiş bir `requirements.txt` veya `pyproject.toml` bulunmamaktadır. Kodun kullandığı backend paketlerini açıkça kurun:
 
 ```powershell
 cd backend
@@ -227,33 +227,33 @@ python -m venv .venv
 python -m pip install fastapi "uvicorn[standard]" sqlalchemy psycopg2-binary pandas python-dotenv pydantic openai
 ```
 
-For macOS or Linux, activate the virtual environment with:
+macOS veya Linux üzerinde sanal ortamı şu komutla etkinleştirin:
 
 ```bash
 source .venv/bin/activate
 ```
 
-Copy `backend/.env.example` to `backend/.env`, then configure the server environment. Never commit `.env`.
+`backend/.env.example` dosyasını `backend/.env` olarak kopyalayın ve sunucu ortamını yapılandırın. `.env` dosyasını hiçbir zaman commit etmeyin.
 
-### Database Configuration
+### Veritabanı Yapılandırması
 
-The backend reads the PostgreSQL connection from `DATABASE_URL`:
+Backend, PostgreSQL bağlantısını `DATABASE_URL` üzerinden okur:
 
 ```dotenv
 DATABASE_URL=postgresql://username:password@localhost:5432/transfer_index
 ```
 
-Create the database before starting the API. The current application calls SQLAlchemy `Base.metadata.create_all()` during startup; no migration framework is included yet.
+API'yi başlatmadan önce veritabanını oluşturun. Güncel uygulama başlangıçta SQLAlchemy `Base.metadata.create_all()` çağrısını yapar; henüz bir migration altyapısı bulunmamaktadır.
 
-Initialize the mapped tables without starting a long-running server:
+Uzun süre çalışan bir sunucu başlatmadan eşlenen tabloları hazırlamak için:
 
 ```powershell
 python -c "import app.main"
 ```
 
-### Dataset Import
+### Veri Setini İçe Aktarma
 
-Run import commands from the `backend/` directory. The scripts expect these user-supplied files:
+Import komutlarını `backend/` klasöründen çalıştırın. Scriptler kullanıcı tarafından sağlanan şu dosyaları bekler:
 
 ```text
 app/data/transfermarkt/players.csv
@@ -267,7 +267,7 @@ app/data/transfermarkt/transfers.csv
 app/data/fbref_player_stats.csv
 ```
 
-A practical import order is:
+Uygulanabilir bir import sırası:
 
 ```powershell
 python -m app.scripts.import_transfermarkt
@@ -279,19 +279,19 @@ python -m app.scripts.import_transfers
 python -m app.scripts.import_fbref_advanced_stats
 ```
 
-The import scripts validate required columns and report skipped or unmatched rows. Review the scripts before running them against an existing database because some importers replace the corresponding historical records.
+Import scriptleri zorunlu sütunları doğrular ve atlanan ya da eşleşmeyen satırları raporlar. Bazı import süreçleri ilgili geçmiş kayıtlarını yeniden oluşturduğu için mevcut bir veritabanında çalıştırmadan önce scriptleri inceleyin.
 
-### Run the Backend
+### Backend'i Çalıştırma
 
-From `backend/`:
+`backend/` klasöründen:
 
 ```powershell
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-The API is then available at `http://127.0.0.1:8000`, with interactive documentation at `http://127.0.0.1:8000/docs`.
+API `http://127.0.0.1:8000`, interaktif dokümantasyon ise `http://127.0.0.1:8000/docs` adresinde kullanılabilir.
 
-### Frontend Setup
+### Frontend Kurulumu
 
 ```powershell
 cd frontend
@@ -299,100 +299,102 @@ npm install
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-Open `http://127.0.0.1:5173` in a browser. The development CORS configuration also permits `http://localhost:5173`.
+Tarayıcıda `http://127.0.0.1:5173` adresini açın. Geliştirme CORS yapılandırması `http://localhost:5173` adresine de izin verir.
 
-### Tests
+### Testler
 
-From `backend/`:
+`backend/` klasöründen:
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-Build and lint the frontend from `frontend/`:
+Frontend build ve lint kontrollerini `frontend/` klasöründen çalıştırın:
 
 ```powershell
 npm run build
 npm run lint
 ```
 
-## Environment Variables
+Mevcut durumda production build başarılıdır. Lint komutu çalışır ancak uygulama kodundaki mevcut React hook/saflık kuralları ve kullanılmayan değişken nedeniyle hata raporlar; README güncellemesi bu kaynak dosyalarını değiştirmez.
 
-| Variable | Status | Purpose |
+## Ortam Değişkenleri
+
+| Değişken | Durum | Amaç |
 | --- | --- | --- |
-| `DATABASE_URL` | Required | PostgreSQL SQLAlchemy connection string |
-| `OPENROUTER_API_KEY` | Used by the legacy AI report service | Authenticates requests made by `AIScoutService` |
-| `OPENROUTER_MODEL` | Optional | Overrides the legacy OpenRouter model; defaults to `openai/gpt-3.5-turbo` |
-| `OPENAI_API_KEY` | Reserved / not currently consumed | Present as a placeholder for the planned Transfer Scenario OpenAI provider |
+| `DATABASE_URL` | Zorunlu | PostgreSQL SQLAlchemy bağlantı dizesi |
+| `OPENROUTER_API_KEY` | Eski AI rapor servisi tarafından kullanılır | `AIScoutService` isteklerinin kimlik doğrulaması |
+| `OPENROUTER_MODEL` | İsteğe bağlı | Eski OpenRouter modelini değiştirir; varsayılan değer `openai/gpt-3.5-turbo` |
+| `OPENAI_API_KEY` | Ayrıldı / henüz kullanılmıyor | Planlanan Transfer Scenario OpenAI sağlayıcısı için placeholder |
 
-API credentials belong only in the backend environment. Do not expose them through Vite variables, frontend code, or source control.
+API kimlik bilgileri yalnızca backend ortamında tutulmalıdır. Bunları Vite değişkenleri, frontend kodu veya kaynak kontrolü üzerinden açığa çıkarmayın.
 
-## API Overview
+## API Özeti
 
-| Method | Endpoint | Purpose |
+| Metot | Endpoint | Amaç |
 | --- | --- | --- |
-| `GET` | `/players/search` | Paginated player search and combined scouting filters |
-| `GET` | `/players/filter-options` | Database-derived filter values |
-| `GET` | `/players/{player_id}` | Player profile |
-| `GET` | `/players/{player_id}/player-score` | Club-independent deterministic player score |
-| `GET` | `/players/{player_id}/advanced-stats` | Season advanced statistics |
-| `GET` | `/players/{player_id}/valuations` | Market-value summary and history |
-| `GET` | `/players/{player_id}/transfers` | Career transfer history |
-| `GET` | `/players/compare` | Two-player comparison |
-| `GET` | `/clubs/search` | Target-club search with current-club exclusion support |
-| `GET` | `/clubs/{club_name}/context` | Structured club intelligence context |
-| `POST` | `/transfer-scenarios/analyze` | Deterministic player-to-club transfer analysis |
-| `POST` | `/transfer-scenarios/ai-analyze` | Cache lookup and deterministic fallback; external provider currently disabled |
+| `GET` | `/players/search` | Sayfalanmış oyuncu arama ve birleşik scouting filtreleri |
+| `GET` | `/players/filter-options` | Veritabanından üretilen filtre seçenekleri |
+| `GET` | `/players/{player_id}` | Oyuncu profili |
+| `GET` | `/players/{player_id}/player-score` | Kulüpten bağımsız deterministik oyuncu puanı |
+| `GET` | `/players/{player_id}/advanced-stats` | Sezon gelişmiş istatistikleri |
+| `GET` | `/players/{player_id}/valuations` | Piyasa değeri özeti ve geçmişi |
+| `GET` | `/players/{player_id}/transfers` | Kariyer transfer geçmişi |
+| `GET` | `/players/compare` | İki oyuncunun karşılaştırması |
+| `GET` | `/clubs/search` | Mevcut kulübü hariç tutma destekli hedef kulüp araması |
+| `GET` | `/clubs/{club_name}/context` | Yapılandırılmış kulüp istihbaratı bağlamı |
+| `POST` | `/transfer-scenarios/analyze` | Deterministik oyuncu-kulüp transfer analizi |
+| `POST` | `/transfer-scenarios/ai-analyze` | Cache kontrolü ve deterministik fallback; harici sağlayıcı şu anda devre dışı |
 
-## Transfer Fit Philosophy
+## Transfer Uyum Felsefesi
 
-Player quality and transfer fit are not interchangeable. A high-quality player may still be a poor target for a club with strong depth in the same position, limited financial capacity, an incompatible age profile, or a difficult contract situation. Transfer Index keeps the player-quality assessment separate, then evaluates squad need, financial context, age, contract, performance, advanced metrics, and objective adaptation signals for the selected destination.
+Oyuncu kalitesi ile transfer uyumu aynı şey değildir. Yüksek kaliteli bir oyuncu; aynı pozisyonda güçlü derinliği bulunan, finansal kapasitesi sınırlı olan, yaş profili uyuşmayan veya zor bir sözleşme durumuna sahip bir kulüp için yine de kötü bir hedef olabilir. Transfer Index önce oyuncu kalitesini bağımsız biçimde değerlendirir; ardından seçilen hedef için kadro ihtiyacı, finansal bağlam, yaş, sözleşme, performans, gelişmiş metrikler ve nesnel adaptasyon sinyallerini analiz eder.
 
-## Responsible AI & Data Limitations
+## Sorumlu AI ve Veri Sınırlamaları
 
-- AI interpretation must remain grounded in the supplied structured context and deterministic analysis.
-- The system should not invent private-life, personality, tactical, medical, or dressing-room claims.
-- Missing information is represented as unavailable rather than guessed or scored as zero quality.
-- Transfer Fit is analytical decision support, not a guarantee of transfer completion or future performance.
-- Dataset coverage, matching quality, and freshness directly affect results.
-- Financial fit currently uses available market-value context; it is not a verified club transfer budget or wage model.
+- AI yorumu, sağlanan yapılandırılmış bağlama ve deterministik analize dayanmalıdır.
+- Sistem özel hayat, kişilik, taktik, sağlık veya soyunma odası hakkında veri dışı iddialar üretmemelidir.
+- Eksik bilgi tahmin edilmez veya sıfır kalite olarak puanlanmaz; kullanılamıyor olarak gösterilir.
+- Transfer Uyumu, analitik karar desteğidir; transferin gerçekleşeceğini veya gelecekteki performansı garanti etmez.
+- Veri setinin kapsamı, eşleştirme kalitesi ve güncelliği sonuçları doğrudan etkiler.
+- Finansal uyum günümüzde mevcut piyasa değeri bağlamını kullanır; doğrulanmış bir kulüp transfer bütçesi veya maaş modeli değildir.
 
-## Roadmap
+## Yol Haritası
 
-- [x] Player database and player detail pages
-- [x] Club pages and player comparison
-- [x] Market-value history and career transfer history
-- [x] Season performance and advanced-stat views
-- [x] Server-side scouting search and combined filters
-- [x] Club context and squad-profile builder
-- [x] Transfer Scenario modal and target-club validation
-- [x] Deterministic Transfer Fit engine
-- [x] Compact AI context, stable hashing, and seven-day cache infrastructure
-- [x] Backend regression tests for deterministic scoring and AI infrastructure
-- [ ] Enable the Transfer Scenario OpenAI interpretation provider
-- [ ] Add a committed Python dependency manifest
-- [ ] Add database migrations and deployment configuration
-- [ ] Expand data-quality, API, and frontend end-to-end coverage
-- [ ] Continue club/logo and dataset enrichment where source data permits
+- [x] Oyuncu veritabanı ve oyuncu detay sayfaları
+- [x] Kulüp sayfaları ve oyuncu karşılaştırması
+- [x] Piyasa değeri geçmişi ve kariyer transfer geçmişi
+- [x] Sezon performansı ve gelişmiş istatistik görünümleri
+- [x] Sunucu taraflı scouting araması ve birleşik filtreler
+- [x] Kulüp bağlamı ve kadro profili oluşturucu
+- [x] Transfer Scenario modalı ve hedef kulüp doğrulaması
+- [x] Deterministik Transfer Uyum motoru
+- [x] Kompakt AI bağlamı, kararlı hash ve yedi günlük cache altyapısı
+- [x] Deterministik puanlama ve AI altyapısı için backend regresyon testleri
+- [ ] Transfer Scenario OpenAI yorumlama sağlayıcısını etkinleştirme
+- [ ] Commit edilmiş Python bağımlılık manifesti ekleme
+- [ ] Veritabanı migration ve deployment yapılandırması ekleme
+- [ ] Veri kalitesi, API ve frontend uçtan uca test kapsamını genişletme
+- [ ] Kaynak verinin izin verdiği ölçüde kulüp/logo ve veri seti zenginleştirmesine devam etme
 
-## Screenshots
+## Ekran Görüntüleri
 
-### Player Profile
+### Oyuncu Profili
 
-<!-- Add screenshot -->
+<!-- Ekran görüntüsü eklenecek -->
 
-### Scouting Database
+### Scouting Veritabanı
 
-<!-- Add screenshot -->
+<!-- Ekran görüntüsü eklenecek -->
 
-### Transfer Scenario Analyzer
+### Transfer Senaryosu Analizörü
 
-<!-- Add screenshot -->
+<!-- Ekran görüntüsü eklenecek -->
 
-## Disclaimer
+## Yasal Uyarı
 
-Transfer Index is an independent educational and portfolio project. It is not affiliated with Transfermarkt, FBref, football clubs, or football leagues. Data belongs to its respective providers and owners.
+Transfer Index bağımsız bir eğitim ve portföy projesidir. Transfermarkt, FBref, futbol kulüpleri veya futbol ligleriyle bağlantılı değildir. Veriler ilgili sağlayıcılara ve sahiplerine aittir.
 
-## Author
+## Geliştirici
 
 Baran Doğrular
