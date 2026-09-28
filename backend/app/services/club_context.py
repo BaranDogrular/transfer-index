@@ -1,6 +1,7 @@
 import re
 import unicodedata
 from collections import Counter, defaultdict
+from statistics import median
 
 from app.database import SessionLocal
 from app.models.club_db import ClubDB
@@ -172,7 +173,7 @@ def build_club_context(club_name, db=None):
         market_values = [
             player.market_value_m
             for player in players
-            if player.market_value_m is not None
+            if player.market_value_m is not None and player.market_value_m >= 0
         ]
         ages = [player.age for player in players if player.age is not None and player.age > 0]
         if market_values:
@@ -189,12 +190,23 @@ def build_club_context(club_name, db=None):
         )
         players_by_position = defaultdict(list)
         nationality_distribution = Counter(
-            player.nationality for player in players if player.nationality
+            player.nationality.strip()
+            for player in players
+            if player.nationality and player.nationality.strip()
         )
-        age_distribution = Counter(get_age_bucket(player.age) for player in players)
+        age_distribution = Counter(get_age_bucket(age) for age in ages)
+        foot_distribution = Counter(
+            player.preferred_foot.strip()
+            for player in players
+            if player.preferred_foot and player.preferred_foot.strip()
+        )
 
         for player in players:
-            position = player.position or "Unknown"
+            position = player.position.strip() if player.position and player.position.strip() else None
+
+            if position is None:
+                continue
+
             players_by_position[position].append(
                 {
                     "id": player.id,
@@ -209,14 +221,81 @@ def build_club_context(club_name, db=None):
                 }
             )
 
-        context = {
-            "club_name": club.name if club else club_name,
-            "league": formatLeagueName(club.league if club else players[0].league if players else None),
-            "country": club.country if club else None,
-            "squad_count": len(players) if players else club.squad_size if club else None,
-            "average_age": average_age if average_age is not None else club.average_age if club else None,
+        resolved_name = club.name if club else club_name
+        resolved_league = formatLeagueName(
+            club.league if club else players[0].league if players else None
+        )
+        resolved_country = club.country if club else None
+        squad_count = len(players) if players else club.squad_size if club else None
+        resolved_average_age = (
+            average_age if average_age is not None else club.average_age if club else None
+        )
+        position_distribution = {
+            position: len(position_players)
+            for position, position_players in sorted(players_by_position.items())
+        }
+        known_age_count = len(ages)
+        young_count = sum(1 for age in ages if age <= 22)
+        prime_count = sum(1 for age in ages if 23 <= age <= 29)
+        veteran_count = sum(1 for age in ages if age >= 30)
+        player_value_total = sum(market_values) if market_values else None
+        value_concentration = (
+            round(sum(sorted(market_values, reverse=True)[:3]) / player_value_total, 4)
+            if player_value_total and player_value_total > 0
+            else None
+        )
+        financial_profile = {
+            "median_player_value": round(median(market_values), 2)
+            if market_values
+            else None,
+            "top_player_value": max(market_values) if market_values else None,
+            "value_concentration": value_concentration,
+        }
+        transfer_policy_signals = {
+            "known_age_count": known_age_count or None,
+            "under_23_count": young_count if known_age_count else None,
+            "under_23_share": round(young_count / known_age_count, 4)
+            if known_age_count
+            else None,
+            "prime_age_23_29_count": prime_count if known_age_count else None,
+            "prime_age_23_29_share": round(prime_count / known_age_count, 4)
+            if known_age_count
+            else None,
+            "over_30_count": veteran_count if known_age_count else None,
+            "over_30_share": round(veteran_count / known_age_count, 4)
+            if known_age_count
+            else None,
+            "known_market_value_count": len(market_values) or None,
+        }
+        squad_profile = {
+            "position_distribution": position_distribution,
+            "age_distribution": dict(age_distribution),
+            "nationality_distribution": dict(nationality_distribution),
+            "foot_distribution": dict(foot_distribution),
+        }
+        club_summary = {
+            "name": resolved_name,
+            "league": resolved_league,
+            "country": resolved_country,
+            "squad_count": squad_count,
+            "average_age": resolved_average_age,
             "total_market_value": total_market_value,
             "average_market_value": average_market_value,
+        }
+        context = {
+            # Flat fields are retained for existing API consumers.
+            "club_name": resolved_name,
+            "league": resolved_league,
+            "country": resolved_country,
+            "squad_count": squad_count,
+            "average_age": resolved_average_age,
+            "total_market_value": total_market_value,
+            "average_market_value": average_market_value,
+            "club": club_summary,
+            "squad_profile": squad_profile,
+            "financial_profile": financial_profile,
+            "position_depth": position_distribution,
+            "transfer_policy_signals": transfer_policy_signals,
             "top_players": [
                 {
                     "id": player.id,
@@ -231,10 +310,8 @@ def build_club_context(club_name, db=None):
             ],
             "nationality_distribution": dict(nationality_distribution),
             "age_distribution": dict(age_distribution),
-            "position_distribution": {
-                position: len(position_players)
-                for position, position_players in sorted(players_by_position.items())
-            },
+            "foot_distribution": dict(foot_distribution),
+            "position_distribution": position_distribution,
             "current_players_by_position": dict(players_by_position),
         }
 

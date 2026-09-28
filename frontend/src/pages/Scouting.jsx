@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { formatClubDisplayName } from "../utils/display";
 
@@ -8,6 +8,57 @@ const EMPTY_FILTER_OPTIONS = {
   leagues: [],
   clubs: [],
   preferred_feet: [],
+};
+
+const humanizeFilterLabel = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/_/g, " ")
+    .replace(/(^|[\s-])([a-z])/g, (match, separator, character) =>
+      `${separator}${character.toUpperCase()}`,
+    );
+
+const normalizeFilterOptions = (options, labelFormatter = humanizeFilterLabel) => {
+  const seenLabels = new Set();
+
+  return (Array.isArray(options) ? options : []).reduce((result, option) => {
+    const rawValue = typeof option === "string" ? option : option?.value;
+    const rawLabel = typeof option === "string" ? null : option?.label;
+    const value = String(rawValue || "").trim();
+    const label = String(rawLabel || labelFormatter(value) || "").trim();
+    const normalizedLabel = label.toLocaleLowerCase();
+
+    if (
+      !value ||
+      !label ||
+      value === "-" ||
+      label === "-" ||
+      value.toLocaleLowerCase() === "unknown" ||
+      label.toLocaleLowerCase() === "unknown" ||
+      seenLabels.has(normalizedLabel)
+    ) {
+      return result;
+    }
+
+    seenLabels.add(normalizedLabel);
+    result.push({ value, label });
+    return result;
+  }, []);
+};
+
+const normalizeFilterOptionPayload = (data) => ({
+  positions: normalizeFilterOptions(data?.positions),
+  nationalities: normalizeFilterOptions(data?.nationalities),
+  leagues: normalizeFilterOptions(data?.leagues),
+  clubs: normalizeFilterOptions(data?.clubs, formatClubDisplayName),
+  preferred_feet: normalizeFilterOptions(data?.preferred_feet),
+});
+
+const parseNumericFilter = (value) => {
+  if (value === "") return null;
+
+  const parsedValue = Number(value);
+  return Number.isFinite(parsedValue) && parsedValue >= 0 ? parsedValue : null;
 };
 
 export default function Scouting() {
@@ -39,21 +90,59 @@ export default function Scouting() {
   const [page, setPage] = useState(1);
   const [totalPlayers, setTotalPlayers] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   const limit = 50;
   const totalPages = Math.ceil(totalPlayers / limit);
+  const parsedMinAge = parseNumericFilter(minAge);
+  const parsedMaxAge = parseNumericFilter(maxAge);
+  const parsedMinValue = parseNumericFilter(minValue);
+  const parsedMaxValue = parseNumericFilter(maxValue);
+  const invalidNumericInput = [
+    minAge,
+    maxAge,
+    minValue,
+    maxValue,
+    minMinutes,
+    minGoals,
+    minAssists,
+  ].some((value) => value !== "" && parseNumericFilter(value) === null);
+  const numericValidationError = invalidNumericInput
+    ? "Enter valid non-negative numbers."
+    : parsedMinAge !== null &&
+        parsedMaxAge !== null &&
+        parsedMinAge > parsedMaxAge
+      ? "Minimum age cannot be greater than maximum age."
+      : parsedMinValue !== null &&
+          parsedMaxValue !== null &&
+          parsedMinValue > parsedMaxValue
+        ? "Minimum market value cannot be greater than maximum market value."
+        : "";
+  const resultStatusText = numericValidationError
+    ? numericValidationError
+    : loadError
+      ? loadError
+      : loading
+        ? "Loading players..."
+        : `${totalPlayers.toLocaleString()} players found`;
 
-  const loadPlayers = async () => {
+  const loadPlayers = useCallback(async (signal) => {
+    if (numericValidationError) {
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
+      setLoadError("");
 
       const params = new URLSearchParams();
 
       params.append("page", page);
       params.append("limit", limit);
 
-      if (debouncedQuery) {
-        params.append("q", debouncedQuery);
+      if (debouncedQuery.trim()) {
+        params.append("q", debouncedQuery.trim());
       }
 
       if (positionFilter) {
@@ -76,48 +165,67 @@ export default function Scouting() {
         params.append("preferred_foot", preferredFootFilter);
       }
 
-      if (minAge) {
-        params.append("min_age", minAge);
-      }
+      const numericParams = {
+        min_age: parsedMinAge,
+        max_age: parsedMaxAge,
+        min_value: parsedMinValue,
+        max_value: parsedMaxValue,
+        min_minutes: parseNumericFilter(minMinutes),
+        min_goals: parseNumericFilter(minGoals),
+        min_assists: parseNumericFilter(minAssists),
+      };
 
-      if (maxAge) {
-        params.append("max_age", maxAge);
-      }
-
-      if (minValue) {
-        params.append("min_value", minValue);
-      }
-
-      if (maxValue) {
-        params.append("max_value", maxValue);
-      }
-
-      if (minMinutes) {
-        params.append("min_minutes", minMinutes);
-      }
-
-      if (minGoals) {
-        params.append("min_goals", minGoals);
-      }
-
-      if (minAssists) {
-        params.append("min_assists", minAssists);
-      }
+      Object.entries(numericParams).forEach(([key, value]) => {
+        if (value !== null) {
+          params.append(key, String(value));
+        }
+      });
 
       const response = await fetch(
         `http://127.0.0.1:8000/players/search?${params}`,
+        { signal },
       );
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Unable to load scouting results.");
+      }
 
       setPlayers(data.players || []);
       setTotalPlayers(data.total || 0);
     } catch (error) {
-      console.error("SCOUTING LOAD ERROR:", error);
+      if (error.name === "AbortError") return;
+
+      setPlayers([]);
+      setTotalPlayers(0);
+      setLoadError(
+        error instanceof TypeError
+          ? "Unable to reach the scouting database."
+          : error.message || "Unable to load scouting results.",
+      );
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
     }
-  };
+  }, [
+    clubFilter,
+    debouncedQuery,
+    leagueFilter,
+    minAssists,
+    minGoals,
+    minMinutes,
+    nationalityFilter,
+    numericValidationError,
+    page,
+    parsedMaxAge,
+    parsedMaxValue,
+    parsedMinAge,
+    parsedMinValue,
+    positionFilter,
+    preferredFootFilter,
+  ]);
 
   const resetFilters = () => {
     setSearchQuery("");
@@ -125,6 +233,7 @@ export default function Scouting() {
     setAutocompleteResults([]);
     setAutocompleteOpen(false);
     setActiveAutocompleteIndex(-1);
+    setLoadError("");
     setPositionFilter("");
     setNationalityFilter("");
     setLeagueFilter("");
@@ -238,12 +347,8 @@ export default function Scouting() {
         }
 
         const data = await response.json();
-        setFilterOptions({
-          ...EMPTY_FILTER_OPTIONS,
-          ...data,
-        });
-      } catch (error) {
-        console.error("FILTER OPTIONS ERROR:", error);
+        setFilterOptions(normalizeFilterOptionPayload(data));
+      } catch {
         setFilterOptions(EMPTY_FILTER_OPTIONS);
       }
     };
@@ -260,12 +365,22 @@ export default function Scouting() {
     return () => clearTimeout(timeout);
   }, [searchQuery]);
 
+  const changeSearchQuery = (event) => {
+    const nextQuery = event.target.value;
+
+    setSearchQuery(nextQuery);
+    if (nextQuery.trim().length < 2) {
+      setAutocompleteResults([]);
+      setAutocompleteOpen(false);
+      setActiveAutocompleteIndex(-1);
+      setAutocompleteLoading(false);
+    }
+  };
+
   useEffect(() => {
+    const abortController = new AbortController();
     const timeout = setTimeout(async () => {
       if (searchQuery.trim().length < 2) {
-        setAutocompleteResults([]);
-        setAutocompleteOpen(false);
-        setActiveAutocompleteIndex(-1);
         return;
       }
 
@@ -276,67 +391,49 @@ export default function Scouting() {
         });
         const response = await fetch(
           `http://127.0.0.1:8000/players/search?${params}`,
+          { signal: abortController.signal },
         );
-        const data = await response.json();
+        const data = await response.json().catch(() => []);
+
+        if (!response.ok) {
+          throw new Error("Player search failed");
+        }
+
         setAutocompleteResults(Array.isArray(data) ? data : data.players || []);
         setAutocompleteOpen(true);
         setActiveAutocompleteIndex(-1);
       } catch (error) {
-        console.error("AUTOCOMPLETE ERROR:", error);
+        if (error.name === "AbortError") return;
+
         setAutocompleteResults([]);
         setAutocompleteOpen(true);
       } finally {
-        setAutocompleteLoading(false);
+        if (!abortController.signal.aborted) {
+          setAutocompleteLoading(false);
+        }
       }
     }, 275);
 
-    return () => clearTimeout(timeout);
+    return () => {
+      clearTimeout(timeout);
+      abortController.abort();
+    };
   }, [searchQuery]);
 
   useEffect(() => {
-    setPage(1);
-  }, [
-    positionFilter,
-    nationalityFilter,
-    leagueFilter,
-    clubFilter,
-    preferredFootFilter,
-    minAge,
-    maxAge,
-    minValue,
-    maxValue,
-    minMinutes,
-    minGoals,
-    minAssists,
-  ]);
+    const abortController = new AbortController();
+    const requestTimeout = setTimeout(() => {
+      loadPlayers(abortController.signal);
+    }, 0);
 
-  useEffect(() => {
-    loadPlayers();
-  }, [
-    debouncedQuery,
-    positionFilter,
-    nationalityFilter,
-    leagueFilter,
-    clubFilter,
-    preferredFootFilter,
-    minAge,
-    maxAge,
-    minValue,
-    maxValue,
-    minMinutes,
-    minGoals,
-    minAssists,
-    page,
-  ]);
+    return () => {
+      clearTimeout(requestTimeout);
+      abortController.abort();
+    };
+  }, [loadPlayers]);
 
   const filterControlClass =
-    "h-12 w-full rounded-2xl border border-white/10 bg-black/40 px-4 text-white outline-none transition-colors placeholder:text-zinc-500 focus:border-cyan-400";
-  const clubFilterOptions = filterOptions.clubs
-    .map((club) => ({
-      value: club,
-      label: formatClubDisplayName(club),
-    }))
-    .filter((option) => option.label !== "-");
+    "h-11 w-full rounded-xl border border-white/10 bg-black/40 px-3.5 text-sm text-white outline-none transition-colors placeholder:text-zinc-500 focus:border-cyan-400 focus:ring-1 focus:ring-emerald-400/20";
 
   const renderFilterLabel = (label) => (
     <span className="mb-2 block text-sm font-semibold text-zinc-300">
@@ -349,7 +446,10 @@ export default function Scouting() {
       {renderFilterLabel(label)}
       <select
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={(event) => {
+          onChange(event.target.value);
+          setPage(1);
+        }}
         className={filterControlClass}
       >
         <option value="">{placeholder}</option>
@@ -369,22 +469,42 @@ export default function Scouting() {
     </label>
   );
 
-  const renderNumberFilter = (label, value, onChange, placeholder) => (
-    <label className="block">
-      {renderFilterLabel(label)}
-      <input
-        type="number"
-        inputMode="numeric"
-        placeholder={placeholder}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className={filterControlClass}
-      />
-    </label>
-  );
+  const renderNumberFilter = (
+    label,
+    value,
+    onChange,
+    placeholder,
+    { allowDecimal = false } = {},
+  ) => {
+    const inputPattern = allowDecimal ? /^\d*(?:[.,]\d{0,2})?$/ : /^\d*$/;
+
+    return (
+      <label className="block">
+        {renderFilterLabel(label)}
+        <input
+          type="text"
+          inputMode={allowDecimal ? "decimal" : "numeric"}
+          placeholder={placeholder}
+          value={value}
+          aria-invalid={Boolean(numericValidationError)}
+          onChange={(event) => {
+            const nextValue = event.target.value.trim();
+
+            if (inputPattern.test(nextValue)) {
+              onChange(nextValue.replace(",", "."));
+              setPage(1);
+            }
+          }}
+          className={`${filterControlClass} ${
+            numericValidationError ? "border-red-400/40" : ""
+          }`}
+        />
+      </label>
+    );
+  };
 
   return (
-    <div className="scout-theme min-h-screen px-6 py-10 text-white">
+    <div className="scout-theme min-h-screen px-4 py-8 text-white sm:px-6 sm:py-10">
       <div className="max-w-7xl mx-auto">
         {/* HEADER */}
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 mb-10">
@@ -402,34 +522,32 @@ export default function Scouting() {
         </div>
 
         {/* FILTERS */}
-        <div className="mb-8 rounded-3xl border border-white/10 bg-white/5 p-6">
-          <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-5">
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 className="text-xl font-black">Filters</h2>
               <p className="mt-1 text-sm text-zinc-400">
-                {loading
-                  ? "Loading players..."
-                  : `${totalPlayers.toLocaleString()} players found`}
+                {resultStatusText}
               </p>
             </div>
 
             <button
               type="button"
               onClick={resetFilters}
-              className="scout-secondary-button h-12 rounded-2xl px-5 font-bold transition md:self-end"
+              className="scout-secondary-button h-11 rounded-xl px-4 text-sm font-bold transition sm:self-end"
             >
-              Reset
+              Reset Filters
             </button>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3 xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-4">
             <label className="relative block md:col-span-2">
               {renderFilterLabel("Search Player")}
               <input
                 type="text"
                 placeholder="Search by player name"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={changeSearchQuery}
                 onFocus={() => {
                   if (searchQuery.trim().length >= 2) {
                     setAutocompleteOpen(true);
@@ -472,7 +590,7 @@ export default function Scouting() {
               />
 
               {autocompleteOpen && searchQuery.trim().length >= 2 && (
-                <div className="absolute left-0 right-0 top-full z-30 mt-2 max-h-96 overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl">
+                <div className="custom-scrollbar absolute left-0 right-0 top-full z-30 mt-2 max-h-80 overflow-y-auto rounded-xl border border-white/10 bg-zinc-950 shadow-2xl">
                   {autocompleteLoading ? (
                     <div className="px-4 py-4 text-sm text-zinc-500">
                       Loading players...
@@ -562,7 +680,7 @@ export default function Scouting() {
               "Club",
               clubFilter,
               setClubFilter,
-              clubFilterOptions,
+              filterOptions.clubs,
               "All clubs",
             )}
             {renderSelectFilter(
@@ -575,8 +693,20 @@ export default function Scouting() {
 
             {renderNumberFilter("Min Age", minAge, setMinAge, "18")}
             {renderNumberFilter("Max Age", maxAge, setMaxAge, "25")}
-            {renderNumberFilter("Min Value (€M)", minValue, setMinValue, "5")}
-            {renderNumberFilter("Max Value (€M)", maxValue, setMaxValue, "50")}
+            {renderNumberFilter(
+              "Min Value (€M)",
+              minValue,
+              setMinValue,
+              "5",
+              { allowDecimal: true },
+            )}
+            {renderNumberFilter(
+              "Max Value (€M)",
+              maxValue,
+              setMaxValue,
+              "50",
+              { allowDecimal: true },
+            )}
             {renderNumberFilter(
               "Min Minutes",
               minMinutes,
@@ -590,8 +720,16 @@ export default function Scouting() {
               setMinAssists,
               "5",
             )}
-
           </div>
+
+          {(numericValidationError || loadError) && (
+            <div
+              role="alert"
+              className="mt-3 rounded-xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200"
+            >
+              {numericValidationError || loadError}
+            </div>
+          )}
         </div>
 
         {/* TABLE */}

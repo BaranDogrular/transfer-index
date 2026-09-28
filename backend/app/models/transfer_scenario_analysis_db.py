@@ -1,9 +1,13 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import relationship
 
 from app.database import Base
+
+
+def utc_now():
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class TransferScenarioAnalysisDB(Base):
@@ -35,12 +39,12 @@ class TransferScenarioAnalysisDB(Base):
     missing_data_notes = Column(JSON, nullable=True)
     market_value_projection = Column(Text, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
     updated_at = Column(
         DateTime,
         nullable=False,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utc_now,
+        onupdate=utc_now,
     )
 
     player = relationship("PlayerDB")

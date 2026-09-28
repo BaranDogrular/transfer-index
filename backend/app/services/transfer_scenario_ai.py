@@ -1,25 +1,19 @@
 import json
 import logging
-import os
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from pathlib import Path
 
-from dotenv import load_dotenv
-from openai import OpenAI
-
+from app.database import SessionLocal
 from app.models.transfer_scenario_analysis_db import TransferScenarioAnalysisDB
 from app.services.transfer_scenario_analyzer import (
     EXPECTED_AI_RESPONSE_SCHEMA,
     build_transfer_scenario_context,
+    count_position_distribution_depth,
+    market_value_to_millions,
+    normalize_position,
 )
 
-
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-load_dotenv(Path(__file__).resolve().parents[3] / ".env")
-
-DEFAULT_MODEL = "gpt-4o-mini"
 CACHE_TTL_DAYS = 7
 logger = logging.getLogger(__name__)
 
@@ -35,6 +29,10 @@ AI_INTERPRETATION_SCHEMA = {
     "main_risks": [],
     "missing_data_notes": [],
 }
+
+
+def utc_now():
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def get_empty_ai_fields():
@@ -111,30 +109,33 @@ def stable_json(value):
         sort_keys=True,
         default=str,
         separators=(",", ":"),
+        allow_nan=False,
     )
 
 
-def build_context_hash(scenario_context):
-    return sha256(stable_json(scenario_context).encode("utf-8")).hexdigest()
+def build_context_hash(ai_transfer_context):
+    return sha256(stable_json(ai_transfer_context).encode("utf-8")).hexdigest()
 
 
 def is_cache_fresh(cached_analysis):
     if not cached_analysis or not cached_analysis.updated_at:
         return False
 
-    return cached_analysis.updated_at >= datetime.utcnow() - timedelta(
+    return cached_analysis.updated_at >= utc_now() - timedelta(
         days=CACHE_TTL_DAYS
     )
 
 
 def serialize_cached_analysis(cached_analysis):
+    sub_scores = cached_analysis.sub_scores or {}
     cached_response = get_empty_ai_fields()
     cached_response.update(
         {
             "source": "cache",
+            "context_hash": cached_analysis.context_hash,
             "fit_score": cached_analysis.fit_score,
             "grade": cached_analysis.grade or "",
-            "sub_scores": cached_analysis.sub_scores or {},
+            "sub_scores": sub_scores,
             "strengths": cached_analysis.strengths or [],
             "risks": cached_analysis.risks or [],
             "main_strengths": cached_analysis.strengths or [],
@@ -147,33 +148,48 @@ def serialize_cached_analysis(cached_analysis):
             "squad_fit": cached_analysis.squad_fit or "",
             "culture_fit": cached_analysis.culture_fit or "",
             "missing_data_notes": cached_analysis.missing_data_notes or [],
+            "missing_data": [
+                key for key, value in sub_scores.items() if value is None
+            ],
             "market_value_projection": cached_analysis.market_value_projection or "",
         }
     )
     return cached_response
 
 
-def get_cached_transfer_analysis(db, context_hash):
-    cached_analysis = (
-        db.query(TransferScenarioAnalysisDB)
-        .filter(TransferScenarioAnalysisDB.context_hash == context_hash)
-        .first()
-    )
+def get_cached_transfer_analysis(context_hash, db=None):
+    owns_session = db is None
+    db = db or SessionLocal()
 
-    if not is_cache_fresh(cached_analysis):
-        return None
+    try:
+        cached_analysis = (
+            db.query(TransferScenarioAnalysisDB)
+            .filter(TransferScenarioAnalysisDB.context_hash == context_hash)
+            .first()
+        )
 
-    return serialize_cached_analysis(cached_analysis)
+        if not is_cache_fresh(cached_analysis):
+            return None
+
+        return serialize_cached_analysis(cached_analysis)
+    finally:
+        if owns_session:
+            db.close()
 
 
 def save_transfer_analysis_cache(
-    db,
     player_id,
     target_club,
-    scenario_context,
     context_hash,
     ai_response,
+    db=None,
 ):
+    if (ai_response or {}).get("source") == "fallback":
+        return None
+
+    owns_session = db is None
+    db = db or SessionLocal()
+
     try:
         cached_analysis = (
             db.query(TransferScenarioAnalysisDB)
@@ -184,10 +200,9 @@ def save_transfer_analysis_cache(
         if not cached_analysis:
             cached_analysis = TransferScenarioAnalysisDB(
                 player_id=player_id,
-                target_club=scenario_context.get("scenario", {}).get("target_club")
-                or target_club,
+                target_club=target_club,
                 context_hash=context_hash,
-                created_at=datetime.utcnow(),
+                created_at=utc_now(),
             )
             db.add(cached_analysis)
 
@@ -210,28 +225,33 @@ def save_transfer_analysis_cache(
         cached_analysis.market_value_projection = ai_response.get(
             "market_value_projection"
         )
-        cached_analysis.updated_at = datetime.utcnow()
+        cached_analysis.updated_at = utc_now()
 
         db.commit()
+        return serialize_cached_analysis(cached_analysis)
     except Exception:
         db.rollback()
         logger.warning("Transfer scenario AI cache write failed.")
+        return None
+    finally:
+        if owns_session:
+            db.close()
 
 
-def fallback_from_context(scenario_context, reason):
+def fallback_from_context(scenario_context, reason, context_hash=None):
     deterministic = scenario_context.get("deterministic_analysis") or {}
     scout_fit_layers = scenario_context.get("scout_fit_layers") or {}
-    missing_data_notes = [
-        item
-        for item in deterministic.get("risks", [])
-        if "missing verified data" in str(item).lower()
+    missing_data = deterministic.get("missing_data") or []
+    missing_data_notes = deterministic.get("missing_data_notes") or [
+        f"No verified data was available for {item}." for item in missing_data
     ]
     fallback = get_empty_ai_fields()
     fallback.update(
         {
             "source": "fallback",
-            "fit_score": deterministic.get("fit_score", 0),
-            "grade": deterministic.get("grade", ""),
+            "context_hash": context_hash,
+            "fit_score": deterministic.get("fit_score"),
+            "grade": deterministic.get("grade"),
             "sub_scores": deterministic.get("sub_scores", {}),
             "strengths": deterministic.get("strengths", []),
             "risks": deterministic.get("risks", []),
@@ -250,10 +270,13 @@ def fallback_from_context(scenario_context, reason):
                 if isinstance(scout_fit_layers.get("culture_fit"), dict)
                 else ""
             ),
+            "missing_data": missing_data,
             "missing_data_notes": missing_data_notes,
             "market_value_projection": "Not available in deterministic fallback.",
-            "summary": reason,
-            "recommendation": "Use deterministic analysis until AI analysis is available.",
+            "summary": deterministic.get("summary") or reason,
+            "recommendation": deterministic.get("grade")
+            or "Insufficient deterministic data.",
+            "fallback_reason": reason,
         }
     )
     return fallback
@@ -271,65 +294,253 @@ def get_nested(value, *keys):
     return current
 
 
-def build_prompt_payload(scenario_context):
-    player_context = scenario_context.get("player_context") or {}
-    scenario = scenario_context.get("scenario") or {}
-    deterministic = scenario_context.get("deterministic_analysis") or {}
+POSITION_PERFORMANCE_KEYS = {
+    "striker": (
+        "goals",
+        "xg",
+        "npxg",
+        "shots",
+        "shots_on_target",
+    ),
+    "winger": (
+        "goals",
+        "assists",
+        "xa",
+        "progressive_carries",
+        "key_passes",
+        "shot_creating_actions",
+        "goal_creating_actions",
+    ),
+    "central_midfielder": (
+        "progressive_passes",
+        "xa",
+        "key_passes",
+        "shot_creating_actions",
+        "goal_creating_actions",
+        "passes_into_final_third",
+    ),
+    "attacking_midfielder": (
+        "progressive_passes",
+        "xa",
+        "key_passes",
+        "shot_creating_actions",
+        "goal_creating_actions",
+        "passes_into_final_third",
+    ),
+    "defensive_midfielder": (
+        "tackles",
+        "interceptions",
+        "progressive_passes",
+        "blocks",
+    ),
+    "centre_back": (
+        "interceptions",
+        "tackles",
+        "blocks",
+        "aerials_won",
+        "progressive_passes",
+    ),
+    "full_back": (
+        "tackles",
+        "interceptions",
+        "progressive_carries",
+        "progressive_passes",
+        "xa",
+        "key_passes",
+    ),
+    "goalkeeper": (
+        "clean_sheets",
+        "saves",
+        "save_percentage",
+        "goals_against",
+        "pass_completion",
+    ),
+}
+
+
+def first_not_none(*values):
+    for value in values:
+        if value is not None:
+            return value
+
+    return None
+
+
+def build_position_relevant_performance(player_context):
+    profile = player_context.get("profile") or {}
     performance = player_context.get("performance_24_25") or {}
     advanced_stats = player_context.get("advanced_stats_24_25") or {}
+    position_group = normalize_position(profile.get("position"))
+    available_values = {
+        "matches": first_not_none(
+            performance.get("matches"),
+            advanced_stats.get("matches"),
+        ),
+        "starts": first_not_none(
+            performance.get("starts"),
+            advanced_stats.get("starts"),
+        ),
+        "minutes": first_not_none(
+            performance.get("minutes"),
+            advanced_stats.get("minutes"),
+        ),
+        "goals": first_not_none(
+            performance.get("goals"),
+            advanced_stats.get("goals"),
+        ),
+        "assists": first_not_none(
+            performance.get("assists"),
+            advanced_stats.get("assists"),
+        ),
+        **advanced_stats,
+    }
+    relevant_keys = POSITION_PERFORMANCE_KEYS.get(
+        position_group,
+        ("goals", "assists"),
+    )
+    output = {
+        "matches": available_values.get("matches"),
+        "starts": available_values.get("starts"),
+        "minutes": available_values.get("minutes"),
+    }
+    output.update({key: available_values.get(key) for key in relevant_keys})
+    return output
+
+
+def top_distribution_items(distribution, limit=5):
+    sorted_items = sorted(
+        (distribution or {}).items(),
+        key=lambda item: (-int(item[1] or 0), str(item[0])),
+    )
+    return {key: value for key, value in sorted_items[:limit]}
+
+
+def build_compact_ai_context(scenario_context):
+    player_context = scenario_context.get("player_context") or {}
+    club_context = scenario_context.get("target_club_context") or {}
+    scenario = scenario_context.get("scenario") or {}
+    deterministic = scenario_context.get("deterministic_analysis") or {}
+    profile = player_context.get("profile") or {}
     market = player_context.get("market") or {}
     contract = player_context.get("contract") or {}
+    squad_profile = club_context.get("squad_profile") or {}
+    financial_profile = club_context.get("financial_profile") or {}
+    position_depth = (
+        club_context.get("position_depth")
+        or squad_profile.get("position_distribution")
+        or club_context.get("position_distribution")
+        or {}
+    )
+    position_group = normalize_position(profile.get("position"))
 
     return {
         "player": {
-            "name": get_nested(player_context, "profile", "name"),
-            "age": get_nested(player_context, "profile", "age"),
-            "position": get_nested(player_context, "profile", "position"),
+            "name": profile.get("name"),
+            "age": profile.get("age"),
+            "position": profile.get("position"),
             "current_club": (
                 get_nested(player_context, "club", "current_club")
-                or get_nested(player_context, "profile", "club")
+                or profile.get("club")
                 or scenario.get("source_club")
             ),
-            "target_club": scenario.get("target_club"),
             "market_value": (
-                market.get("current_market_value")
-                or market.get("current_value")
-                or scenario.get("market_value")
+                market_value_to_millions(
+                    first_not_none(
+                        market.get("current_market_value"),
+                        market.get("current_value"),
+                        scenario.get("market_value"),
+                    )
+                )
             ),
             "contract_years_left": (
-                contract.get("contract_years_left")
-                or scenario.get("contract_years_left")
+                first_not_none(
+                    contract.get("contract_years_left"),
+                    scenario.get("contract_years_left"),
+                )
             ),
         },
-        "performance_summary": {
-            "matches": performance.get("matches"),
-            "starts": performance.get("starts"),
-            "minutes": performance.get("minutes"),
-            "goals": performance.get("goals"),
-            "assists": performance.get("assists"),
-            "goals_per_90": performance.get("goals_per_90"),
-            "assists_per_90": performance.get("assists_per_90"),
+        "performance": build_position_relevant_performance(player_context),
+        "target_club": {
+            "name": get_nested(club_context, "club", "name")
+            or club_context.get("club_name")
+            or scenario.get("target_club"),
+            "league": get_nested(club_context, "club", "league")
+            or club_context.get("league"),
+            "squad_profile_summary": {
+                "squad_count": get_nested(club_context, "club", "squad_count")
+                or club_context.get("squad_count"),
+                "average_age": first_not_none(
+                    get_nested(club_context, "club", "average_age"),
+                    club_context.get("average_age"),
+                ),
+                "age_distribution": squad_profile.get("age_distribution")
+                or club_context.get("age_distribution")
+                or {},
+                "foot_distribution": squad_profile.get("foot_distribution")
+                or club_context.get("foot_distribution")
+                or {},
+                "top_nationalities": top_distribution_items(
+                    squad_profile.get("nationality_distribution")
+                    or club_context.get("nationality_distribution")
+                    or {}
+                ),
+            },
+            "position_depth": {
+                "position_group": position_group,
+                "same_position_player_count": count_position_distribution_depth(
+                    position_depth,
+                    profile.get("position"),
+                ),
+                "distribution": position_depth,
+            },
+            "financial_profile_summary": {
+                "total_market_value": market_value_to_millions(
+                    club_context.get("total_market_value")
+                ),
+                "average_market_value": market_value_to_millions(
+                    club_context.get("average_market_value")
+                ),
+                "median_player_value": market_value_to_millions(
+                    financial_profile.get("median_player_value")
+                ),
+                "top_player_value": market_value_to_millions(
+                    financial_profile.get("top_player_value")
+                ),
+                "value_concentration": financial_profile.get(
+                    "value_concentration"
+                ),
+                "market_value_unit": "EUR millions",
+            },
         },
-        "advanced_stats_summary": {
-            "xg": advanced_stats.get("xg"),
-            "xa": advanced_stats.get("xa"),
-            "npxg": advanced_stats.get("npxg"),
-            "shots": advanced_stats.get("shots"),
-            "shots_on_target": advanced_stats.get("shots_on_target"),
-            "key_passes": advanced_stats.get("key_passes"),
-            "progressive_passes": advanced_stats.get("progressive_passes"),
-            "progressive_carries": advanced_stats.get("progressive_carries"),
-            "tackles": advanced_stats.get("tackles"),
-            "interceptions": advanced_stats.get("interceptions"),
-        },
-        "deterministic_fit": {
+        "analysis": {
             "fit_score": deterministic.get("fit_score"),
             "grade": deterministic.get("grade"),
             "sub_scores": deterministic.get("sub_scores"),
             "strengths": deterministic.get("strengths"),
             "risks": deterministic.get("risks"),
+            "missing_data": deterministic.get("missing_data") or [],
         },
     }
+
+
+def build_ai_transfer_context(player_id, target_club, db=None):
+    owns_session = db is None
+    db = db or SessionLocal()
+
+    try:
+        scenario_context = build_transfer_scenario_context(player_id, target_club, db)
+
+        if not scenario_context or scenario_context.get("error"):
+            return None
+
+        return build_compact_ai_context(scenario_context)
+    finally:
+        if owns_session:
+            db.close()
+
+
+def build_prompt_payload(scenario_context):
+    return build_compact_ai_context(scenario_context)
 
 
 def build_ai_messages(scenario_context):
@@ -351,31 +562,12 @@ def build_ai_messages(scenario_context):
                 "Write a concise transfer scenario interpretation for this "
                 "player and target club.\n\n"
                 "Required JSON schema:\n"
-                f"{json.dumps(AI_INTERPRETATION_SCHEMA, ensure_ascii=False)}\n\n"
+                f"{stable_json(AI_INTERPRETATION_SCHEMA)}\n\n"
                 "Context:\n"
-                f"{json.dumps(prompt_payload, ensure_ascii=False, default=str)}"
+                f"{stable_json(prompt_payload)}"
             ),
         },
     ]
-
-
-def call_openai_for_analysis(scenario_context, deterministic):
-    api_key = os.getenv("OPENAI_API_KEY")
-
-    if not api_key or not api_key.strip():
-        return None
-
-    client = OpenAI(api_key=api_key, timeout=30)
-    response = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", DEFAULT_MODEL),
-        messages=build_ai_messages(scenario_context),
-        temperature=0.2,
-        max_tokens=700,
-        response_format={"type": "json_object"},
-    )
-    raw_content = response.choices[0].message.content
-    parsed_response = json.loads(strip_json_code_fence(raw_content))
-    return normalize_ai_response(parsed_response, deterministic)
 
 
 def analyze_transfer_scenario_with_ai(player_id, target_club, db):
@@ -387,47 +579,18 @@ def analyze_transfer_scenario_with_ai(player_id, target_club, db):
     if scenario_context.get("error") == "Target club not found":
         return {"error": "Target club not found"}
 
-    context_hash = build_context_hash(scenario_context)
-    cached_analysis = get_cached_transfer_analysis(db, context_hash)
+    ai_transfer_context = build_compact_ai_context(scenario_context)
+    context_hash = build_context_hash(ai_transfer_context)
+    cached_analysis = get_cached_transfer_analysis(context_hash, db)
 
     if cached_analysis:
         return cached_analysis
 
-    deterministic = scenario_context.get("deterministic_analysis") or {}
-
-    if not os.getenv("OPENAI_API_KEY", "").strip():
-        logger.info(
-            "OPENAI_API_KEY is not configured. Using deterministic transfer scenario fallback."
-        )
-        return fallback_from_context(
-            scenario_context,
-            "OpenAI API key missing. Returned deterministic analysis.",
-        )
-
-    try:
-        ai_response = call_openai_for_analysis(scenario_context, deterministic)
-    except Exception:
-        logger.warning(
-            "OpenAI transfer scenario analysis failed. Using deterministic fallback."
-        )
-        return fallback_from_context(
-            scenario_context,
-            "OpenAI analysis unavailable. Returned deterministic analysis.",
-        )
-
-    if not ai_response:
-        return fallback_from_context(
-            scenario_context,
-            "OpenAI API key missing. Returned deterministic analysis.",
-        )
-
-    ai_response["source"] = "openai"
-    save_transfer_analysis_cache(
-        db,
-        player_id,
-        target_club,
-        scenario_context,
-        context_hash,
-        ai_response,
+    logger.info(
+        "OpenAI provider is not enabled. Using deterministic transfer scenario fallback."
     )
-    return ai_response
+    return fallback_from_context(
+        scenario_context,
+        "OpenAI provider is not enabled. Returned deterministic analysis.",
+        context_hash,
+    )

@@ -1,5 +1,7 @@
+import math
 import re
 import unicodedata
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import case, func, or_
@@ -94,7 +96,7 @@ def normalize_search_query(value: str) -> str:
 
 def normalized_column(column):
     return func.translate(
-        func.lower(func.coalesce(column, "")),
+        func.lower(func.trim(func.coalesce(column, ""))),
         ACCENT_FROM,
         ACCENT_TO,
     )
@@ -256,7 +258,16 @@ def get_clean_distinct_values(db: Session, column):
         .order_by(column.asc())
         .all()
     )
-    return [row[0] for row in rows if row[0]]
+    clean_values = {}
+    for row in rows:
+        value = str(row[0] or "").strip()
+
+        if not value or value == "-" or value.casefold() == "unknown":
+            continue
+
+        clean_values.setdefault(value.casefold(), value)
+
+    return sorted(clean_values.values(), key=str.casefold)
 
 
 def serialize_advanced_stats(player_id, stats=None, season="2024/25"):
@@ -415,6 +426,42 @@ def search_players(
 ):
     query = db.query(PlayerDB)
     normalized_query = normalize_search_query(q) if q else ""
+    position_value = (position or "").strip()
+    league_value = (league or "").strip()
+    nationality_value = (nationality or "").strip()
+    club_value = (club or "").strip()
+    preferred_foot_value = (preferred_foot or "").strip()
+
+    numeric_filters = {
+        "Minimum age": min_age,
+        "Maximum age": max_age,
+        "Minimum market value": min_value,
+        "Maximum market value": max_value,
+        "Minimum minutes": min_minutes,
+        "Minimum goals": min_goals,
+        "Minimum assists": min_assists,
+        "Maximum salary": max_salary,
+    }
+    for label, value in numeric_filters.items():
+        if value is not None and (
+            value < 0 or (isinstance(value, float) and not math.isfinite(value))
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{label} must be a non-negative number.",
+            )
+
+    if min_age is not None and max_age is not None and min_age > max_age:
+        raise HTTPException(
+            status_code=400,
+            detail="Minimum age cannot be greater than maximum age.",
+        )
+
+    if min_value is not None and max_value is not None and min_value > max_value:
+        raise HTTPException(
+            status_code=400,
+            detail="Minimum market value cannot be greater than maximum market value.",
+        )
 
     if normalized_query:
         normalized_name = normalized_column(PlayerDB.name)
@@ -436,20 +483,55 @@ def search_players(
             )
         )
 
-    if position:
-        query = query.filter(PlayerDB.position.ilike(position))
+    if position_value:
+        query = query.filter(
+            normalized_column(PlayerDB.position)
+            == normalize_search_query(position_value)
+        )
 
-    if league:
-        query = query.filter(PlayerDB.league.ilike(f"%{league}%"))
+    if league_value:
+        normalized_league_filter = normalize_search_query(league_value)
+        comparable_league_filter = re.sub(
+            r"[^a-z0-9]+",
+            "",
+            normalized_league_filter,
+        )
+        matching_leagues = [
+            value
+            for value in get_clean_distinct_values(db, PlayerDB.league)
+            if comparable_league_filter
+            in {
+                re.sub(r"[^a-z0-9]+", "", normalize_search_query(value)),
+                re.sub(
+                    r"[^a-z0-9]+",
+                    "",
+                    normalize_search_query(formatLeagueName(value)),
+                ),
+            }
+        ]
+        if matching_leagues:
+            query = query.filter(PlayerDB.league.in_(matching_leagues))
+        else:
+            query = query.filter(
+                normalized_column(PlayerDB.league) == normalized_league_filter
+            )
 
-    if nationality:
-        query = query.filter(PlayerDB.nationality.ilike(f"%{nationality}%"))
+    if nationality_value:
+        query = query.filter(
+            normalized_column(PlayerDB.nationality)
+            == normalize_search_query(nationality_value)
+        )
 
-    if club:
-        query = query.filter(PlayerDB.club.ilike(f"%{club}%"))
+    if club_value:
+        query = query.filter(
+            normalized_column(PlayerDB.club) == normalize_search_query(club_value)
+        )
 
-    if preferred_foot:
-        query = query.filter(PlayerDB.preferred_foot.ilike(preferred_foot))
+    if preferred_foot_value:
+        query = query.filter(
+            normalized_column(PlayerDB.preferred_foot)
+            == normalize_search_query(preferred_foot_value)
+        )
 
     if min_age is not None:
         query = query.filter(PlayerDB.age >= min_age)
@@ -511,11 +593,11 @@ def search_players(
     has_filters = any(
         value is not None
         for value in [
-            position,
-            league,
-            nationality,
-            club,
-            preferred_foot,
+            position_value or None,
+            league_value or None,
+            nationality_value or None,
+            club_value or None,
+            preferred_foot_value or None,
             min_age,
             max_age,
             min_value,
@@ -529,7 +611,7 @@ def search_players(
 
     query_param_keys = set(request.query_params.keys())
     is_autocomplete_request = (
-        q
+        normalized_query
         and not has_filters
         and page == 1
         and (limit <= 10 or query_param_keys == {"q"})
@@ -561,6 +643,17 @@ def search_players(
 @router.get("/players/filter-options")
 def get_player_filter_options(db: Session = Depends(get_db)):
     leagues = get_clean_distinct_values(db, PlayerDB.league)
+    league_options = {}
+    for league in leagues:
+        label = formatLeagueName(league)
+
+        if label == "LaLiga":
+            label = "La Liga"
+
+        if label == "-":
+            continue
+
+        league_options.setdefault(normalize_search_query(label), label)
 
     return {
         "positions": get_clean_distinct_values(db, PlayerDB.position),
@@ -569,10 +662,10 @@ def get_player_filter_options(db: Session = Depends(get_db)):
         "preferred_feet": get_clean_distinct_values(db, PlayerDB.preferred_foot),
         "leagues": [
             {
-                "value": league,
-                "label": formatLeagueName(league),
+                "value": label,
+                "label": label,
             }
-            for league in leagues
+            for label in sorted(league_options.values(), key=str.casefold)
         ],
     }
 
@@ -604,6 +697,7 @@ def get_players(db: Session = Depends(get_db)):
 def search_clubs(
     q: str = "",
     limit: int = 10,
+    player_id: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
     normalized_query = normalize_search_query(q) if q else ""
@@ -645,20 +739,62 @@ def search_clubs(
             func.length(ClubDB.name).asc(),
             ClubDB.name.asc(),
         )
-        .limit(result_limit)
+        .limit(min(result_limit * 4, 40))
         .all()
     )
 
-    return [
-        {
-            "club_id": club.club_id,
-            "club_name": club.name,
-            "league": formatLeagueName(club.league),
-            "country": club.country,
-            "logo_url": club.logo_url,
-        }
-        for club in clubs
-    ]
+    excluded_club_ids = set()
+    excluded_club_names = set()
+    if player_id is not None:
+        player = db.query(PlayerDB).filter(PlayerDB.id == player_id).first()
+        if player:
+            current_club = get_player_club(db, player)
+            excluded_club_ids = {
+                club_id
+                for club_id in [
+                    player.current_club_id,
+                    current_club.club_id if current_club else None,
+                ]
+                if club_id is not None
+            }
+            for name in [
+                player.club,
+                current_club.name if current_club else None,
+                current_club.club_code if current_club else None,
+            ]:
+                normalized_name_value = normalize_club_name_for_compare(name)
+                if normalized_name_value:
+                    excluded_club_names.add(normalized_name_value)
+
+    results = []
+    seen = set()
+    for club in clubs:
+        normalized_club_name = normalize_club_name_for_compare(club.name)
+        normalized_league = normalize_search_query(club.league or "")
+        dedupe_key = (normalized_club_name, normalized_league)
+
+        if (
+            club.club_id in excluded_club_ids
+            or normalized_club_name in excluded_club_names
+            or dedupe_key in seen
+        ):
+            continue
+
+        seen.add(dedupe_key)
+        results.append(
+            {
+                "club_id": club.club_id,
+                "club_name": club.name,
+                "league": formatLeagueName(club.league),
+                "country": club.country,
+                "logo_url": club.logo_url,
+            }
+        )
+
+        if len(results) >= result_limit:
+            break
+
+    return results
 
 
 @router.get("/clubs/{club_name}/context")

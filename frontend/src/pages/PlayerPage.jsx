@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link, useParams } from "react-router-dom";
+import { Search } from "lucide-react";
 import { formatClubDisplayName } from "../utils/display";
 import {
   LineChart,
@@ -155,17 +156,94 @@ const normalizeClubName = (clubName) => {
     .trim();
 };
 
-const isKnownScenarioValue = (value) => {
-  const text = String(value || "").trim();
+const getScenarioClubOptionName = (club) =>
+  club?.club_name || club?.name || club?.club || "";
 
-  return Boolean(text && text !== "-" && text.toLowerCase() !== "unknown");
+const getScenarioClubOptionLeague = (club) => club?.league || "";
+
+const getScenarioClubOptionKey = (club) => {
+  const clubId = club?.club_id ?? club?.id;
+  const normalizedName = normalizeClubName(getScenarioClubOptionName(club));
+
+  if (clubId !== null && clubId !== undefined && clubId !== "") {
+    return `id:${clubId}`;
+  }
+
+  if (!normalizedName) {
+    return "";
+  }
+
+  return `name:${normalizedName}:league:${normalizePositionText(
+    getScenarioClubOptionLeague(club),
+  )}`;
 };
 
-const getScenarioErrorMessage = (detail, fallbackMessage) => {
-  const rawMessage = Array.isArray(detail)
+const prepareScenarioClubOptions = (
+  clubs,
+  query,
+  currentClubIds,
+  currentClubNames,
+) => {
+  const normalizedQuery = normalizeClubName(query);
+  const normalizedCurrentNames = currentClubNames
+    .map(normalizeClubName)
+    .filter(Boolean);
+  const normalizedCurrentIds = currentClubIds
+    .filter((value) => value !== null && value !== undefined)
+    .map(String);
+  const seen = new Set();
+  const uniqueClubs = (Array.isArray(clubs) ? clubs : []).filter((club) => {
+    const normalizedName = normalizeClubName(getScenarioClubOptionName(club));
+    const normalizedLeague = normalizePositionText(
+      getScenarioClubOptionLeague(club),
+    );
+    const clubId = club?.club_id ?? club?.id;
+    const dedupeKey = normalizedName
+      ? `${normalizedName}:${normalizedLeague}`
+      : "";
+
+    if (
+      !dedupeKey ||
+      seen.has(dedupeKey) ||
+      normalizedCurrentNames.includes(normalizedName) ||
+      normalizedCurrentIds.includes(String(clubId))
+    ) {
+      return false;
+    }
+
+    seen.add(dedupeKey);
+    return true;
+  });
+  const getRank = (club) => {
+    const normalizedName = normalizeClubName(getScenarioClubOptionName(club));
+
+    if (normalizedName === normalizedQuery) return 0;
+    if (normalizedName.startsWith(normalizedQuery)) return 1;
+    if (normalizedName.split(" ").some((word) => word.startsWith(normalizedQuery))) {
+      return 2;
+    }
+    if (normalizedName.includes(normalizedQuery)) return 3;
+    return 4;
+  };
+
+  return uniqueClubs.sort((firstClub, secondClub) => {
+    const rankCompare = getRank(firstClub) - getRank(secondClub);
+
+    if (rankCompare !== 0) {
+      return rankCompare;
+    }
+
+    return getScenarioClubOptionName(firstClub).localeCompare(
+      getScenarioClubOptionName(secondClub),
+    );
+  });
+};
+
+const getScenarioErrorMessage = (detail, fallbackMessage, status) => {
+  const rawDetail = Array.isArray(detail)
     ? detail.map((item) => item?.msg || item).join(" ")
-    : String(detail || fallbackMessage || "");
-  const normalizedMessage = rawMessage.toLowerCase();
+    : String(detail || "");
+  const normalizedMessage = rawDetail.toLowerCase();
 
   if (normalizedMessage.includes("already at this club")) {
     return "Player is already at this club.";
@@ -183,7 +261,19 @@ const getScenarioErrorMessage = (detail, fallbackMessage) => {
     return "Player not found.";
   }
 
-  return rawMessage || fallbackMessage || "Transfer scenario analysis failed.";
+  if (status === 400) {
+    return rawDetail || "Please check the selected target club and try again.";
+  }
+
+  if (status === 404) {
+    return rawDetail || "The requested player or target club could not be found.";
+  }
+
+  if (status >= 500) {
+    return "The analysis service is temporarily unavailable. Please try again.";
+  }
+
+  return rawDetail || fallbackMessage || "Transfer scenario analysis failed.";
 };
 
 const getPositionGroup = (position) => {
@@ -277,23 +367,20 @@ function PlayerPage() {
   const [aiReport, setAiReport] = useState(null);
   const [loadingAi, setLoadingAi] = useState(false);
   const [isScenarioModalOpen, setIsScenarioModalOpen] = useState(false);
-  const [scenarioLeague, setScenarioLeague] = useState("");
+  const [scenarioClubQuery, setScenarioClubQuery] = useState("");
   const [selectedScenarioClub, setSelectedScenarioClub] = useState(null);
-  const [isScenarioLeagueDropdownOpen, setIsScenarioLeagueDropdownOpen] =
-    useState(false);
   const [isScenarioClubDropdownOpen, setIsScenarioClubDropdownOpen] =
     useState(false);
-  const [scenarioLeagueWarning, setScenarioLeagueWarning] = useState("");
   const [scenarioClubOptions, setScenarioClubOptions] = useState([]);
   const [scenarioClubOptionsLoading, setScenarioClubOptionsLoading] =
     useState(false);
-  const [scenarioClubOptionsLoaded, setScenarioClubOptionsLoaded] =
-    useState(false);
+  const [scenarioClubSearchError, setScenarioClubSearchError] = useState("");
   const [scenarioResult, setScenarioResult] = useState(null);
   const [scenarioLoading, setScenarioLoading] = useState(false);
   const [scenarioAiLoading, setScenarioAiLoading] = useState(false);
   const [scenarioError, setScenarioError] = useState("");
   const scenarioRequestIdRef = useRef(0);
+  const scenarioRequestAbortRef = useRef(null);
   const [playerScoreResult, setPlayerScoreResult] = useState(null);
   const [playerScoreLoading, setPlayerScoreLoading] = useState(false);
   const [playerScoreError, setPlayerScoreError] = useState("");
@@ -321,25 +408,6 @@ function PlayerPage() {
   const normalizedCurrentScenarioClubNames = currentScenarioClubNames
     .map(normalizeClubName)
     .filter(Boolean);
-  const getScenarioClubOptionName = (club) =>
-    club?.club_name || club?.name || club?.club || "";
-  const getScenarioClubOptionLeague = (club) => club?.league || "";
-  const getScenarioClubOptionKey = (club) => {
-    const clubId = club?.club_id ?? club?.id;
-    const normalizedName = normalizeClubName(getScenarioClubOptionName(club));
-
-    if (clubId !== null && clubId !== undefined && clubId !== "") {
-      return `id:${clubId}`;
-    }
-
-    if (!normalizedName) {
-      return "";
-    }
-
-    return `name:${normalizedName}:league:${normalizePositionText(
-      getScenarioClubOptionLeague(club),
-    )}`;
-  };
   const isCurrentScenarioClubName = (clubName) => {
     const normalizedClubName = normalizeClubName(clubName);
 
@@ -358,102 +426,69 @@ function PlayerPage() {
       isCurrentScenarioClubName(getScenarioClubOptionName(club))
     );
   };
-  const dedupeScenarioClubs = (clubs) => {
-    const seen = new Set();
-
-    return (Array.isArray(clubs) ? clubs : []).filter((club) => {
-      if (isCurrentScenarioClubOption(club)) {
-        return false;
-      }
-
-      const key = getScenarioClubOptionKey(club);
-
-      if (!key || seen.has(key)) {
-        return false;
-      }
-
-      seen.add(key);
-      return true;
-    });
-  };
-  const sortScenarioClubs = (clubs) =>
-    [...clubs].sort((firstClub, secondClub) => {
-      const firstLeague = getScenarioClubOptionLeague(firstClub);
-      const secondLeague = getScenarioClubOptionLeague(secondClub);
-      const leagueCompare = firstLeague.localeCompare(secondLeague);
-
-      if (leagueCompare !== 0) {
-        return leagueCompare;
-      }
-
-      return getScenarioClubOptionName(firstClub).localeCompare(
-        getScenarioClubOptionName(secondClub),
-      );
-    });
-
   useEffect(() => {
-    if (
-      !isScenarioModalOpen ||
-      scenarioClubOptionsLoaded ||
-      scenarioClubOptions.length > 0
-    ) {
+    const trimmedQuery = scenarioClubQuery.trim();
+
+    if (!isScenarioModalOpen || !isScenarioClubDropdownOpen) {
       return undefined;
     }
 
-    let isCurrent = true;
+    if (trimmedQuery.length < 2) {
+      return undefined;
+    }
 
-    const loadScenarioClubOptions = async () => {
+    const abortController = new AbortController();
+    const searchTimeout = window.setTimeout(async () => {
       try {
         setScenarioClubOptionsLoading(true);
+        setScenarioClubSearchError("");
 
-        const response = await fetch("http://127.0.0.1:8000/players");
+        const searchParams = new URLSearchParams({
+          q: trimmedQuery,
+          limit: "10",
+          player_id: String(id),
+        });
+        const response = await fetch(
+          `http://127.0.0.1:8000/clubs/search?${searchParams.toString()}`,
+          { signal: abortController.signal },
+        );
 
         if (!response.ok) {
-          throw new Error("Failed to fetch club options");
+          throw new Error("Club search failed");
         }
 
         const data = await response.json();
-        const playerRows = Array.isArray(data.players) ? data.players : [];
-        const clubOptions = playerRows
-          .map((playerRow) => ({
-            club_id: playerRow.club_id || playerRow.current_club_id,
-            club_name: playerRow.club,
-            league: playerRow.league,
-            logo_url: playerRow.club_logo_url,
-          }))
-          .filter(
-            (club) =>
-              isKnownScenarioValue(getScenarioClubOptionName(club)) &&
-              isKnownScenarioValue(getScenarioClubOptionLeague(club)),
-          );
+        setScenarioClubOptions(
+          prepareScenarioClubOptions(
+            data,
+            trimmedQuery,
+            [player?.club_id, player?.current_club_id, clubInfo?.club_id],
+            [player?.club, clubInfo?.club_name],
+          ),
+        );
+      } catch (error) {
+        if (error.name === "AbortError") return;
 
-        if (isCurrent) {
-          setScenarioClubOptions(
-            sortScenarioClubs(dedupeScenarioClubs(clubOptions)),
-          );
-          setScenarioClubOptionsLoaded(true);
-        }
-      } catch {
-        if (isCurrent) {
-          setScenarioClubOptions([]);
-          setScenarioClubOptionsLoaded(true);
-        }
+        setScenarioClubOptions([]);
+        setScenarioClubSearchError(
+          "Unable to load clubs. Check your connection and try again.",
+        );
       } finally {
-        if (isCurrent) {
+        if (!abortController.signal.aborted) {
           setScenarioClubOptionsLoading(false);
         }
       }
-    };
-
-    loadScenarioClubOptions();
+    }, 220);
 
     return () => {
-      isCurrent = false;
+      window.clearTimeout(searchTimeout);
+      abortController.abort();
     };
   }, [
     isScenarioModalOpen,
-    scenarioClubOptionsLoaded,
-    scenarioClubOptions.length,
+    isScenarioClubDropdownOpen,
+    scenarioClubQuery,
+    id,
     player?.club,
     player?.club_id,
     player?.current_club_id,
@@ -468,13 +503,31 @@ function PlayerPage() {
 
     const previousBodyOverflow = document.body.style.overflow;
     const previousDocumentOverflow = document.documentElement.style.overflow;
+    const previousBodyPaddingRight = document.body.style.paddingRight;
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
 
     document.body.style.overflow = "hidden";
     document.documentElement.style.overflow = "hidden";
+    if (scrollbarWidth > 0) {
+      document.body.style.paddingRight = `${scrollbarWidth}px`;
+    }
 
     const handleKeyDown = (event) => {
-      if (event.key === "Escape" && !scenarioLoading && !scenarioAiLoading) {
+      if (event.key === "Escape") {
+        scenarioRequestIdRef.current += 1;
+        scenarioRequestAbortRef.current?.abort();
+        scenarioRequestAbortRef.current = null;
         setIsScenarioModalOpen(false);
+        setScenarioClubQuery("");
+        setSelectedScenarioClub(null);
+        setIsScenarioClubDropdownOpen(false);
+        setScenarioClubOptions([]);
+        setScenarioClubOptionsLoading(false);
+        setScenarioClubSearchError("");
+        setScenarioResult(null);
+        setScenarioError("");
+        setScenarioLoading(false);
+        setScenarioAiLoading(false);
       }
     };
 
@@ -483,14 +536,14 @@ function PlayerPage() {
     return () => {
       document.body.style.overflow = previousBodyOverflow;
       document.documentElement.style.overflow = previousDocumentOverflow;
+      document.body.style.paddingRight = previousBodyPaddingRight;
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isScenarioModalOpen, scenarioLoading, scenarioAiLoading]);
+  }, [isScenarioModalOpen]);
 
   useEffect(() => {
     setClubInfo(null);
     setScenarioClubOptions([]);
-    setScenarioClubOptionsLoaded(false);
 
     fetch(`http://127.0.0.1:8000/players/${id}`)
       .then((res) => res.json())
@@ -1163,17 +1216,24 @@ function PlayerPage() {
     setScenarioError("");
   };
 
-  const resetTransferScenarioState = () => {
+  const cancelTransferScenarioRequest = () => {
     scenarioRequestIdRef.current += 1;
-    setScenarioLeague("");
-    setSelectedScenarioClub(null);
-    setIsScenarioLeagueDropdownOpen(false);
-    setIsScenarioClubDropdownOpen(false);
-    setScenarioLeagueWarning("");
-    setScenarioError("");
-    setScenarioResult(null);
+    scenarioRequestAbortRef.current?.abort();
+    scenarioRequestAbortRef.current = null;
     setScenarioLoading(false);
     setScenarioAiLoading(false);
+  };
+
+  const resetTransferScenarioState = () => {
+    cancelTransferScenarioRequest();
+    setScenarioClubQuery("");
+    setSelectedScenarioClub(null);
+    setIsScenarioClubDropdownOpen(false);
+    setScenarioClubOptions([]);
+    setScenarioClubOptionsLoading(false);
+    setScenarioClubSearchError("");
+    setScenarioError("");
+    setScenarioResult(null);
   };
 
   const closeTransferScenarioModal = () => {
@@ -1184,41 +1244,40 @@ function PlayerPage() {
   const editTransferScenario = () => {
     setScenarioResult(null);
     setScenarioError("");
-    setScenarioLeagueWarning("");
   };
 
-  const selectScenarioLeague = (league) => {
-    setScenarioLeague(league);
+  const changeScenarioClubQuery = (event) => {
+    const nextQuery = event.target.value;
+
+    cancelTransferScenarioRequest();
+    setScenarioClubQuery(nextQuery);
     setSelectedScenarioClub(null);
-    setScenarioLeagueWarning("");
+    setScenarioClubOptions([]);
+    setScenarioClubOptionsLoading(false);
     setScenarioError("");
     setScenarioResult(null);
-    setIsScenarioLeagueDropdownOpen(false);
-    setIsScenarioClubDropdownOpen(false);
+    setScenarioClubSearchError("");
+    setIsScenarioClubDropdownOpen(true);
   };
 
   const selectScenarioClub = (club) => {
+    cancelTransferScenarioRequest();
+    setScenarioClubQuery(getScenarioClubOptionName(club).trim());
     setSelectedScenarioClub(club);
-    setScenarioLeagueWarning("");
     setScenarioError("");
     setScenarioResult(null);
+    setScenarioClubOptions([]);
+    setScenarioClubSearchError("");
     setIsScenarioClubDropdownOpen(false);
-  };
-
-  const toggleScenarioClubDropdown = () => {
-    if (!scenarioLeague) {
-      setScenarioLeagueWarning("Please select a league first.");
-      setIsScenarioClubDropdownOpen(false);
-      return;
-    }
-
-    setScenarioLeagueWarning("");
-    setIsScenarioLeagueDropdownOpen(false);
-    setIsScenarioClubDropdownOpen((isOpen) => !isOpen);
   };
 
   const analyzeTransferScenario = async (event) => {
     event.preventDefault();
+
+    if (scenarioLoading || scenarioAiLoading) {
+      return;
+    }
+
     setScenarioError("");
     setScenarioResult(null);
 
@@ -1236,6 +1295,9 @@ function PlayerPage() {
       return;
     }
 
+    const abortController = new AbortController();
+    scenarioRequestAbortRef.current?.abort();
+    scenarioRequestAbortRef.current = abortController;
     setScenarioLoading(true);
 
     try {
@@ -1248,6 +1310,7 @@ function PlayerPage() {
             player_id: Number(id),
             target_club: targetClub,
           }),
+          signal: abortController.signal,
         },
       );
 
@@ -1258,6 +1321,7 @@ function PlayerPage() {
           getScenarioErrorMessage(
             data.detail,
             "Transfer scenario analysis failed.",
+            response.status,
           ),
         );
       }
@@ -1274,17 +1338,28 @@ function PlayerPage() {
         setScenarioError("");
       }
     } catch (error) {
+      if (error.name === "AbortError") return;
+
       if (scenarioRequestIdRef.current === requestId) {
-        setScenarioError(error.message || "Transfer scenario analysis failed.");
+        setScenarioError(
+          error instanceof TypeError
+            ? "Unable to reach the analysis service. Check your connection and try again."
+            : error.message || "Transfer scenario analysis failed.",
+        );
       }
     } finally {
       if (scenarioRequestIdRef.current === requestId) {
         setScenarioLoading(false);
+        scenarioRequestAbortRef.current = null;
       }
     }
   };
 
   const analyzeTransferScenarioAi = async () => {
+    if (scenarioLoading || scenarioAiLoading) {
+      return;
+    }
+
     setScenarioError("");
 
     const requestId = scenarioRequestIdRef.current + 1;
@@ -1301,6 +1376,9 @@ function PlayerPage() {
       return;
     }
 
+    const abortController = new AbortController();
+    scenarioRequestAbortRef.current?.abort();
+    scenarioRequestAbortRef.current = abortController;
     setScenarioAiLoading(true);
 
     try {
@@ -1313,6 +1391,7 @@ function PlayerPage() {
             player_id: Number(id),
             target_club: targetClub,
           }),
+          signal: abortController.signal,
         },
       );
 
@@ -1323,6 +1402,7 @@ function PlayerPage() {
           getScenarioErrorMessage(
             data.detail,
             "AI transfer scenario analysis failed.",
+            response.status,
           ),
         );
       }
@@ -1332,14 +1412,19 @@ function PlayerPage() {
         setScenarioError("");
       }
     } catch (error) {
+      if (error.name === "AbortError") return;
+
       if (scenarioRequestIdRef.current === requestId) {
         setScenarioError(
-          error.message || "AI transfer scenario analysis failed.",
+          error instanceof TypeError
+            ? "Unable to reach the analysis service. Check your connection and try again."
+            : error.message || "AI transfer scenario analysis failed.",
         );
       }
     } finally {
       if (scenarioRequestIdRef.current === requestId) {
         setScenarioAiLoading(false);
+        scenarioRequestAbortRef.current = null;
       }
     }
   };
@@ -1618,26 +1703,6 @@ function PlayerPage() {
       value: scenarioClubNeeds.length > 0 ? scenarioClubNeeds.join(", ") : "-",
     },
   ];
-  const availableScenarioClubOptions = sortScenarioClubs(
-    dedupeScenarioClubs(scenarioClubOptions),
-  );
-  const scenarioLeagueOptions = Array.from(
-    new Map(
-      availableScenarioClubOptions
-        .map((club) => getScenarioClubOptionLeague(club))
-        .filter(isKnownScenarioValue)
-        .map((league) => [normalizePositionText(league), league]),
-    ).values(),
-  ).sort((firstLeague, secondLeague) => firstLeague.localeCompare(secondLeague));
-  const scenarioLeagueClubOptions = scenarioLeague
-    ? availableScenarioClubOptions
-        .filter((club) => getScenarioClubOptionLeague(club) === scenarioLeague)
-        .sort((firstClub, secondClub) =>
-          getScenarioClubOptionName(firstClub).localeCompare(
-            getScenarioClubOptionName(secondClub),
-          ),
-        )
-    : [];
   const isScenarioTargetClubEmpty = !selectedScenarioClub;
   const isScenarioCurrentClubTarget =
     Boolean(selectedScenarioClub) &&
@@ -2410,27 +2475,27 @@ function PlayerPage() {
           {isScenarioModalOpen &&
             createPortal(
             <div
-              className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden px-3 py-4 sm:py-6"
+              className="fixed inset-0 z-50 flex h-[100dvh] items-center justify-center overflow-hidden p-2 sm:p-4"
             >
               <div
-                className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+                className="absolute inset-0 bg-black/75 backdrop-blur-sm"
                 onMouseDown={closeTransferScenarioModal}
               />
               <div
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="transfer-scenario-title"
-                className="relative z-10 flex max-h-[90vh] w-[95vw] max-w-[720px] flex-col overflow-hidden rounded-3xl border border-cyan-400/20 bg-[#050707]/95 shadow-2xl shadow-black/70"
+                className="relative z-10 flex max-h-[calc(100dvh-1rem)] w-full max-w-[720px] flex-col overflow-hidden rounded-2xl border border-cyan-400/20 bg-[#050707] shadow-2xl shadow-black/70 sm:max-h-[calc(100dvh-2rem)]"
                 onMouseDown={(event) => event.stopPropagation()}
               >
-                <div className="sticky top-0 z-20 flex shrink-0 items-start justify-between gap-4 border-b border-white/10 bg-[#050707]/95 px-5 py-4 backdrop-blur-xl sm:px-6">
+                <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-4 py-3 sm:px-5 sm:py-4">
                   <div>
-                    <p className="text-xs font-bold uppercase text-cyan-300">
+                    <p className="text-xs font-bold uppercase tracking-wide text-cyan-300">
                       Transfer Scenario
                     </p>
                     <h2
                       id="transfer-scenario-title"
-                      className="mt-2 text-2xl font-black text-white sm:text-3xl"
+                      className="mt-1 text-xl font-black text-white sm:text-2xl"
                     >
                       Analyze Target Club Fit
                     </h2>
@@ -2439,200 +2504,172 @@ function PlayerPage() {
                   <button
                     type="button"
                     onClick={closeTransferScenarioModal}
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm font-black text-zinc-300 transition-colors hover:bg-white/10"
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-sm font-black text-zinc-300 transition-colors hover:bg-white/10"
                     aria-label="Close transfer scenario modal"
                   >
                     X
                   </button>
                 </div>
 
-                <div
-                  className={`custom-scrollbar flex-1 px-5 py-5 sm:px-6 ${
-                    scenarioResult &&
-                    !isScenarioLeagueDropdownOpen &&
-                    !isScenarioClubDropdownOpen
-                      ? "overflow-y-auto"
-                      : "overflow-visible"
-                  }`}
-                >
-                <form
-                  id="transfer-scenario-form"
-                  onSubmit={analyzeTransferScenario}
-                  className="space-y-4 rounded-2xl border border-white/10 bg-black/30 p-4"
-                >
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div className="relative">
-                      <span className="mb-2 block text-xs font-bold uppercase tracking-wide text-zinc-500">
-                        League
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsScenarioLeagueDropdownOpen((isOpen) => !isOpen);
-                          setIsScenarioClubDropdownOpen(false);
-                        }}
-                        disabled={scenarioClubOptionsLoading}
-                        className="flex h-12 w-full items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/40 px-4 text-left text-sm font-semibold text-white outline-none transition-colors hover:border-cyan-400/40 focus:border-cyan-400/60 disabled:cursor-not-allowed disabled:opacity-60"
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <div className="shrink-0 px-4 py-4 sm:px-5">
+                    <form
+                      id="transfer-scenario-form"
+                      onSubmit={analyzeTransferScenario}
+                      className="rounded-xl border border-white/10 bg-black/30 p-3 sm:p-4"
+                    >
+                      <label
+                        htmlFor="transfer-scenario-club-search"
+                        className="mb-2 block text-xs font-bold uppercase tracking-wide text-zinc-500"
                       >
-                        <span className={scenarioLeague ? "truncate" : "truncate text-zinc-500"}>
-                          {scenarioLeague || "Select league"}
-                        </span>
-                        <span className="text-cyan-300">⌄</span>
-                      </button>
+                        Target club
+                      </label>
+                      <div className="relative">
+                        <input
+                          id="transfer-scenario-club-search"
+                          type="search"
+                          value={scenarioClubQuery}
+                          onChange={changeScenarioClubQuery}
+                          onFocus={() => {
+                            if (!scenarioResult) {
+                              setIsScenarioClubDropdownOpen(true);
+                            }
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Escape") {
+                              setIsScenarioClubDropdownOpen(false);
+                            }
+                          }}
+                          placeholder="Search by club name"
+                          autoComplete="off"
+                          role="combobox"
+                          aria-expanded={isScenarioClubDropdownOpen}
+                          aria-controls="transfer-scenario-club-options"
+                          aria-autocomplete="list"
+                          disabled={scenarioLoading || scenarioAiLoading}
+                          className="h-11 w-full rounded-xl border border-white/10 bg-black/50 px-4 pr-10 text-base font-semibold text-white outline-none transition-colors placeholder:text-zinc-600 hover:border-cyan-400/35 focus:border-cyan-400/60 disabled:cursor-not-allowed disabled:opacity-60"
+                        />
+                        <Search
+                          aria-hidden="true"
+                          className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-cyan-300"
+                        />
+                      </div>
 
-                      {isScenarioLeagueDropdownOpen && (
-                        <div className="custom-scrollbar absolute left-0 right-0 top-full z-50 mt-2 max-h-64 overflow-y-auto rounded-2xl border border-cyan-400/20 bg-[#050707] p-1 shadow-2xl shadow-black/60">
-                          {scenarioLeagueOptions.length > 0 ? (
-                            scenarioLeagueOptions.map((league) => (
-                              <button
-                                key={league}
-                                type="button"
-                                onClick={() => selectScenarioLeague(league)}
-                                className={`flex w-full items-center justify-between rounded-xl px-4 py-3 text-left text-sm font-semibold transition-colors hover:bg-white/5 ${
-                                  scenarioLeague === league
-                                    ? "bg-cyan-400/10 text-cyan-200"
-                                    : "text-zinc-200"
-                                }`}
-                              >
-                                <span className="truncate">{league}</span>
-                              </button>
-                            ))
-                          ) : (
-                            <div className="px-4 py-3 text-sm text-zinc-500">
-                              No leagues available
+                      {isScenarioClubDropdownOpen && (
+                        <div
+                          id="transfer-scenario-club-options"
+                          role="listbox"
+                          className="custom-scrollbar mt-2 max-h-[min(12rem,24dvh)] overflow-y-auto overscroll-contain rounded-xl border border-cyan-400/20 bg-[#080b0b] p-1 shadow-xl shadow-black/50 sm:max-h-[min(15rem,32dvh)]"
+                        >
+                          {scenarioClubQuery.trim().length < 2 ? (
+                            <div className="px-3 py-2.5 text-sm text-zinc-500">
+                              Type at least 2 characters to search.
                             </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="relative">
-                      <span className="mb-2 block text-xs font-bold uppercase tracking-wide text-zinc-500">
-                        Club
-                      </span>
-                      <button
-                        type="button"
-                        onClick={toggleScenarioClubDropdown}
-                        aria-disabled={!scenarioLeague}
-                        className={`flex h-12 w-full items-center justify-between gap-3 rounded-2xl border px-4 text-left text-sm font-semibold outline-none transition-colors ${
-                          scenarioLeague
-                            ? "border-white/10 bg-black/40 text-white hover:border-cyan-400/40 focus:border-cyan-400/60"
-                            : "cursor-not-allowed border-amber-400/15 bg-amber-500/5 text-zinc-500"
-                        }`}
-                      >
-                        <span className={selectedScenarioClub ? "truncate" : "truncate text-zinc-500"}>
-                          {selectedScenarioClubDisplayName !== "-"
-                            ? selectedScenarioClubDisplayName
-                            : selectedScenarioClubName ||
-                            (scenarioLeague ? "Select club" : "Select league first")}
-                        </span>
-                        <span className={scenarioLeague ? "text-cyan-300" : "text-amber-300"}>
-                          ⌄
-                        </span>
-                      </button>
-
-                      {isScenarioClubDropdownOpen && scenarioLeague && (
-                        <div className="custom-scrollbar absolute left-0 right-0 top-full z-50 mt-2 max-h-64 overflow-y-auto rounded-2xl border border-cyan-400/20 bg-[#050707] p-1 shadow-2xl shadow-black/60">
-                          {scenarioClubOptionsLoading ? (
-                            <div className="px-4 py-3 text-sm text-zinc-400">
-                              Loading clubs...
+                          ) : scenarioClubOptionsLoading ? (
+                            <div className="flex items-center gap-2 px-3 py-2.5 text-sm text-zinc-400">
+                              <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-cyan-300/20 border-t-cyan-300" />
+                              Searching clubs...
                             </div>
-                          ) : scenarioLeagueClubOptions.length > 0 ? (
-                            scenarioLeagueClubOptions.map((club) => {
+                          ) : scenarioClubSearchError ? (
+                            <div className="px-3 py-2.5 text-sm text-red-200">
+                              {scenarioClubSearchError}
+                            </div>
+                          ) : scenarioClubOptions.length > 0 ? (
+                            scenarioClubOptions.map((club) => {
                               const clubName = getScenarioClubOptionName(club);
-                              const isSelected =
-                                getScenarioClubOptionKey(club) ===
-                                getScenarioClubOptionKey(selectedScenarioClub);
 
                               return (
                                 <button
                                   key={getScenarioClubOptionKey(club)}
                                   type="button"
+                                  role="option"
+                                  aria-selected={false}
                                   onClick={() => selectScenarioClub(club)}
-                                  className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:bg-white/5 ${
-                                    isSelected
-                                      ? "bg-cyan-400/10 text-cyan-200"
-                                      : "text-zinc-200"
-                                  }`}
+                                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-zinc-200 transition-colors hover:bg-cyan-400/10 hover:text-cyan-100 focus:bg-cyan-400/10 focus:outline-none"
                                 >
-                                  {club.logo_url && (
+                                  {club.logo_url ? (
                                     <img
                                       src={club.logo_url}
                                       alt=""
                                       className="h-7 w-7 shrink-0 rounded-full bg-white object-contain p-0.5"
                                     />
+                                  ) : (
+                                    <span className="h-7 w-7 shrink-0 rounded-full border border-white/10 bg-white/5" />
                                   )}
                                   <span className="min-w-0 flex-1">
                                     <span className="block truncate text-sm font-semibold">
                                       {formatClubDisplayName(clubName)}
                                     </span>
                                     <span className="block truncate text-xs text-zinc-500">
-                                      {getScenarioClubOptionLeague(club) || "-"}
+                                      {getScenarioClubOptionLeague(club) || "League unavailable"}
                                     </span>
                                   </span>
                                 </button>
                               );
                             })
                           ) : (
-                            <div className="px-4 py-3 text-sm text-zinc-500">
-                              No clubs available
+                            <div className="px-3 py-2.5 text-sm text-zinc-500">
+                              No matching clubs found.
                             </div>
                           )}
                         </div>
                       )}
-                    </div>
+
+                      {selectedScenarioClub && !isScenarioCurrentClubTarget && (
+                        <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-emerald-400/15 bg-emerald-400/5 px-3 py-2 text-sm">
+                          <span className="truncate font-semibold text-emerald-200">
+                            {selectedScenarioClubDisplayName}
+                          </span>
+                          <span className="shrink-0 text-xs text-zinc-500">
+                            {getScenarioClubOptionLeague(selectedScenarioClub) || "Selected"}
+                          </span>
+                        </div>
+                      )}
+
+                      {isScenarioCurrentClubTarget && (
+                        <p className="mt-2 text-sm font-semibold text-amber-300">
+                          Player is already at this club.
+                        </p>
+                      )}
+                    </form>
+
+                    {scenarioError && (
+                      <div
+                        role="alert"
+                        className={`mt-3 rounded-xl border px-4 py-3 text-sm font-semibold ${
+                          isScenarioErrorWarning
+                            ? "border-amber-400/20 bg-amber-500/10 text-amber-200"
+                            : "border-red-400/20 bg-red-500/10 text-red-200"
+                        }`}
+                      >
+                        {scenarioError}
+                      </div>
+                    )}
+
+                    {!scenarioResult &&
+                      !scenarioLoading &&
+                      !scenarioAiLoading &&
+                      !isScenarioClubDropdownOpen && (
+                      <div className="mt-3 rounded-xl border border-cyan-400/10 bg-cyan-400/5 px-4 py-3 text-sm text-zinc-400">
+                        Choose a target club to evaluate transfer fit.
+                      </div>
+                    )}
+
+                    {(scenarioLoading || scenarioAiLoading) && (
+                      <div className="mt-3 rounded-xl border border-cyan-400/15 bg-black/30 px-4 py-3">
+                        <div className="flex items-center gap-3 text-sm font-semibold text-cyan-200">
+                          <span className="h-4 w-4 animate-spin rounded-full border-2 border-cyan-300/20 border-t-cyan-300" />
+                          {scenarioAiLoading && scenarioResult
+                            ? "Generating AI Report..."
+                            : "Analyzing..."}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
-                  {scenarioLeagueWarning && (
-                    <div className="rounded-xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm font-semibold text-amber-200">
-                      {scenarioLeagueWarning}
-                    </div>
-                  )}
-
-                  {isScenarioCurrentClubTarget && (
-                    <span className="mt-2 block text-sm font-semibold text-amber-300">
-                      Player is already at this club.
-                    </span>
-                  )}
-
-                </form>
-
-                {scenarioError && (
-                  <div
-                    className={`mt-5 rounded-2xl border px-4 py-3 text-sm font-semibold ${
-                      isScenarioErrorWarning
-                        ? "border-amber-400/20 bg-amber-500/10 text-amber-200"
-                        : "border-red-400/20 bg-red-500/10 text-red-200"
-                    }`}
-                  >
-                    {scenarioError}
-                  </div>
-                )}
-
-                {!scenarioResult && !scenarioLoading && !scenarioAiLoading && (
-                  <div className="mt-5 rounded-2xl border border-cyan-400/10 bg-cyan-400/5 px-4 py-4 text-sm text-zinc-400">
-                    Choose a target club to evaluate transfer fit.
-                  </div>
-                )}
-
-                {(scenarioLoading || scenarioAiLoading) && (
-                  <div className="mt-5 rounded-2xl border border-cyan-400/15 bg-black/30 p-5">
-                    <div className="flex items-center gap-3 text-sm font-semibold text-cyan-200">
-                      <span className="h-5 w-5 animate-spin rounded-full border-2 border-cyan-300/20 border-t-cyan-300" />
-                      {scenarioAiLoading && scenarioResult
-                        ? "Generating AI Report..."
-                        : "Analyzing transfer fit..."}
-                    </div>
-                    <div className="mt-5 space-y-3">
-                      <div className="h-4 w-2/3 animate-pulse rounded-full bg-white/10" />
-                      <div className="h-4 w-full animate-pulse rounded-full bg-white/10" />
-                      <div className="h-4 w-4/5 animate-pulse rounded-full bg-white/10" />
-                    </div>
-                  </div>
-                )}
-
-                {scenarioResult && (
-                  <div className="mt-6 space-y-5">
+                  {scenarioResult && (
+                    <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4 sm:px-5 sm:pb-5">
+                      <div className="space-y-4">
                     <div className="rounded-2xl border border-cyan-400/15 bg-black/40 p-5">
                       <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
                         <div className="flex shrink-0 flex-col items-center justify-center text-center">
@@ -2671,7 +2708,7 @@ function PlayerPage() {
                             <button
                               type="button"
                               onClick={analyzeTransferScenarioAi}
-                              disabled={scenarioAiLoading}
+                              disabled={scenarioLoading || scenarioAiLoading}
                               className="mt-4 inline-flex items-center gap-2 rounded-xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-2 text-xs font-black uppercase tracking-wide text-cyan-200 transition-colors hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-60"
                             >
                               {scenarioAiLoading && (
@@ -2845,24 +2882,25 @@ function PlayerPage() {
                       </div>
                     </div>
                   </div>
+                    </div>
                 )}
                 </div>
-                <div className="sticky bottom-0 z-20 flex shrink-0 flex-col gap-3 border-t border-white/10 bg-[#050707]/95 px-5 py-4 backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between sm:px-6">
+                <div className="flex shrink-0 items-center justify-between gap-3 border-t border-white/10 bg-[#050707] px-4 py-3 sm:px-5">
                   <button
                     type="button"
                     onClick={closeTransferScenarioModal}
-                    className="rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-black text-zinc-200 transition-colors hover:bg-white/10"
+                    className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-black text-zinc-200 transition-colors hover:bg-white/10"
                   >
                     Cancel
                   </button>
 
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <div className="flex items-center gap-2 sm:gap-3">
                     {scenarioResult && (
                       <button
                         type="button"
                         onClick={editTransferScenario}
                         disabled={scenarioLoading || scenarioAiLoading}
-                        className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-5 py-3 text-sm font-black text-emerald-200 transition-colors hover:bg-emerald-400/15 disabled:opacity-50"
+                        className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 py-2.5 text-sm font-black text-emerald-200 transition-colors hover:bg-emerald-400/15 disabled:opacity-50 sm:px-4"
                       >
                         Edit Scenario
                       </button>
@@ -2871,7 +2909,7 @@ function PlayerPage() {
                       type="submit"
                       form="transfer-scenario-form"
                       disabled={isScenarioAnalyzeDisabled}
-                      className="scout-primary-button flex items-center justify-center gap-2 rounded-2xl px-6 py-3 text-sm font-black transition-colors disabled:opacity-50"
+                      className="scout-primary-button flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-black transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:px-5"
                     >
                       {scenarioLoading && (
                         <span className="h-4 w-4 animate-spin rounded-full border-2 border-black/20 border-t-black" />

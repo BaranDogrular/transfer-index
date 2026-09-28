@@ -30,6 +30,11 @@ ADVANCED_STATS_KEYS = {
     "blocks": "blocks",
     "aerials_won": "aerials_won",
     "aerials_lost": "aerials_lost",
+    "clean_sheets": "clean_sheets",
+    "saves": "saves",
+    "save_percentage": "save_percentage",
+    "goals_against": "goals_against",
+    "pass_completion": "pass_completion",
     "yellow_cards": "yellow_cards",
     "red_cards": "red_cards",
 }
