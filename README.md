@@ -4,6 +4,10 @@ Transfer Index; oyuncu profillerini, sezon performansını, gelişmiş istatisti
 
 **Geliştirme Durumu:** Aktif Geliştirme
 
+## Ön İzleme
+
+![Transfer Index ana sayfa ön izlemesi](docs/images/transfer-index-preview.png)
+
 ## Genel Bakış
 
 Futbolcu transfer kararları yalnızca öne çıkan birkaç istatistiğe dayanmaz. Transfer Index, scouting iş akışının farklı parçalarını tek bir uygulamada birleştirir:
@@ -376,20 +380,6 @@ Oyuncu kalitesi ile transfer uyumu aynı şey değildir. Yüksek kaliteli bir oy
 - [ ] Veritabanı migration ve deployment yapılandırması ekleme
 - [ ] Veri kalitesi, API ve frontend uçtan uca test kapsamını genişletme
 - [ ] Kaynak verinin izin verdiği ölçüde kulüp/logo ve veri seti zenginleştirmesine devam etme
-
-## Ekran Görüntüleri
-
-### Oyuncu Profili
-
-<!-- Ekran görüntüsü eklenecek -->
-
-### Scouting Veritabanı
-
-<!-- Ekran görüntüsü eklenecek -->
-
-### Transfer Senaryosu Analizörü
-
-<!-- Ekran görüntüsü eklenecek -->
 
 ## Yasal Uyarı
 
